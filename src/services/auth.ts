@@ -1,49 +1,37 @@
 import axios from "axios";
 import { API_BASE_URL, ENDPOINTS } from "./constants";
-import type { AuthConfig } from "./types";
+
+/**
+ * 세션 관리: GET 페이지 접속으로 JSESSIONID 쿠키를 자동 획득.
+ * 로그인 불필요 — 세션 쿠키만 있으면 API 호출 가능.
+ */
 
 let cachedSessionId: string | null = null;
 
-export function loadAuthConfig(): AuthConfig {
-  const sessionId = process.env.KICPA_SESSION_ID;
-  if (sessionId) {
-    return { mode: "session", sessionId };
-  }
-
-  const username = process.env.KICPA_USERNAME;
-  const password = process.env.KICPA_PASSWORD;
-  if (username && password) {
-    return { mode: "credentials", username, password };
-  }
-
-  throw new Error("AUTH_NOT_CONFIGURED");
-}
-
 export async function getSessionCookie(): Promise<string> {
-  const config = loadAuthConfig();
-
-  if (config.mode === "session") {
-    return config.sessionId!;
-  }
-
   if (cachedSessionId) {
     return cachedSessionId;
   }
 
-  return login(config.username!, config.password!);
+  return acquireSession();
 }
 
-export async function login(username: string, password: string): Promise<string> {
-  const response = await axios.post(
-    `${API_BASE_URL}${ENDPOINTS.LOGIN}`,
-    new URLSearchParams({ username, password }).toString(),
+/**
+ * 검색 페이지에 GET 요청을 보내서 JSESSIONID 세션 쿠키를 획득
+ */
+async function acquireSession(): Promise<string> {
+  console.log("[KICPA Session] Acquiring new session via page GET...");
+
+  const response = await axios.get(
+    `${API_BASE_URL}${ENDPOINTS.DAILY_SEARCH_PAGE}`,
     {
-      headers: {
-        "Content-Type": "application/x-www-form-urlencoded",
-      },
-      maxRedirects: 0,
-      validateStatus: (status) => status >= 200 && status < 400,
+      maxRedirects: 5,
+      validateStatus: () => true,
       timeout: 15000,
+      // 쿠키를 받기 위해 필요
+      headers: {
+        "User-Agent": "Mozilla/5.0 (compatible; KicpaBetaMCP/1.0)",
+      },
     }
   );
 
@@ -53,23 +41,18 @@ export async function login(username: string, password: string): Promise<string>
       const match = cookie.match(/JSESSIONID=([^;]+)/);
       if (match) {
         cachedSessionId = match[1];
+        console.log("[KICPA Session] JSESSIONID acquired successfully");
         return cachedSessionId;
       }
     }
   }
 
-  throw new Error("LOGIN_FAILED");
+  throw new Error("SESSION_ACQUIRE_FAILED: No JSESSIONID in response");
 }
 
 export async function refreshSession(): Promise<string> {
-  const config = loadAuthConfig();
-
-  if (config.mode === "credentials") {
-    cachedSessionId = null;
-    return login(config.username!, config.password!);
-  }
-
-  throw new Error("SESSION_EXPIRED");
+  cachedSessionId = null;
+  return acquireSession();
 }
 
 export function clearCachedSession(): void {

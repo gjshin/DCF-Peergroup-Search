@@ -1,8 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { fetchBetaData } from "../koscom-client";
-import { loadAuthConfig } from "../auth";
-import { handleApiError, createSessionExpiredError, createAuthConfigError } from "../utils/error-handler";
+import { handleApiError } from "../utils/error-handler";
 import { formatBetaResultsMarkdown, formatBetaResultsJson } from "../utils/formatters";
 import { MAX_STOCK_CODES } from "../constants";
 
@@ -14,7 +13,7 @@ const GetBetaInputSchema = z.object({
   date: z.string()
     .regex(/^\d{8}$/, "날짜는 YYYYMMDD 형식이어야 합니다 (예: 20260328)")
     .optional()
-    .describe("조회일자 (YYYYMMDD). 미입력 시 가장 최근 영업일"),
+    .describe("조회일자 (YYYYMMDD). 미입력 시 오늘 날짜"),
   country: z.enum(["KR", "US"])
     .default("KR")
     .describe("국가: KR(국내, 기본값) 또는 US(미국)"),
@@ -65,17 +64,7 @@ Examples:
     },
     async (params: GetBetaInput) => {
       try {
-        loadAuthConfig();
-      } catch {
-        return {
-          content: [{ type: "text" as const, text: createAuthConfigError() }],
-          isError: true,
-        };
-      }
-
-      try {
-        const today = new Date();
-        const defaultDate = formatDateToYYYYMMDD(today);
+        const defaultDate = formatDateToYYYYMMDD(new Date());
 
         const results = await fetchBetaData({
           stockCodes: params.stock_codes,
@@ -102,21 +91,6 @@ Examples:
           content: [{ type: "text" as const, text }],
         };
       } catch (error) {
-        if (error instanceof Error) {
-          if (error.message === "SESSION_EXPIRED") {
-            const config = loadAuthConfig();
-            return {
-              content: [{ type: "text" as const, text: createSessionExpiredError(config.mode) }],
-              isError: true,
-            };
-          }
-          if (error.message.startsWith("API_ERROR:")) {
-            return {
-              content: [{ type: "text" as const, text: `Error: ${error.message}` }],
-              isError: true,
-            };
-          }
-        }
         return {
           content: [{ type: "text" as const, text: handleApiError(error) }],
           isError: true,

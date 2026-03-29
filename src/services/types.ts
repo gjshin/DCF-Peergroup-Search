@@ -1,10 +1,28 @@
 export interface BetaResultItem {
-  MARKET_NAME?: string;
-  NAME_K?: string;
-  NAME_E?: string;
-  PERIOD_NAME?: string;
-  CLOSE_PRICE?: string;
-  [key: string]: string | undefined;
+  // camelCase 응답 필드
+  searchDate?: string;
+  tradeDate?: number | string;
+  marketName?: string;
+  simpleCode?: string;
+  nameK?: string;
+  nameE?: string;
+  periodName?: string;
+  closePrice?: number | string;
+  // 베타 필드 (camelCase)
+  y1Beta?: number;
+  y1BetaAdj?: number;
+  y1BetaPoint?: number;
+  y2Beta?: number;
+  y2BetaAdj?: number;
+  y2BetaPoint?: number;
+  y3Beta?: number;
+  y3BetaAdj?: number;
+  y3BetaPoint?: number;
+  y5Beta?: number;
+  y5BetaAdj?: number;
+  y5BetaPoint?: number;
+  // fallback for legacy field names
+  [key: string]: string | number | undefined;
 }
 
 export interface ApiResponse {
@@ -29,13 +47,6 @@ export interface StockBetaResult {
   closePrice: string;
   date: string;
   betas: Record<string, BetaValues>;
-}
-
-export interface AuthConfig {
-  mode: "session" | "credentials";
-  sessionId?: string;
-  username?: string;
-  password?: string;
 }
 
 export interface SearchStockResult {

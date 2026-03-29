@@ -2,8 +2,8 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import axios from "axios";
 import { API_BASE_URL, ENDPOINTS, COUNTRY_CODE } from "../constants";
-import { getSessionCookie, loadAuthConfig } from "../auth";
-import { handleApiError, createAuthConfigError } from "../utils/error-handler";
+import { getSessionCookie } from "../auth";
+import { handleApiError } from "../utils/error-handler";
 
 const SearchStockInputSchema = z.object({
   query: z.string()
@@ -47,15 +47,6 @@ Examples:
     },
     async (params: SearchStockInput) => {
       try {
-        loadAuthConfig();
-      } catch {
-        return {
-          content: [{ type: "text" as const, text: createAuthConfigError() }],
-          isError: true,
-        };
-      }
-
-      try {
         const sessionId = await getSessionCookie();
         const gubun = COUNTRY_CODE[params.country];
 
@@ -69,7 +60,6 @@ Examples:
             },
             headers: {
               "Cookie": `JSESSIONID=${sessionId}`,
-              "Referer": `${API_BASE_URL}/kicpa/check/stock/dailySearchData.do`,
             },
             timeout: 15000,
           }
