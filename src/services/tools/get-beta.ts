@@ -48,7 +48,7 @@ Args:
   - country ('KR' | 'US'): 국가 (기본: KR)
   - period_type ('Daily' | 'Weekly' | 'Monthly'): 주기 (기본: Daily)
   - beta_periods (string[]): 베타 기간 1Y/2Y/3Y/5Y (기본: 전체)
-  - response_format ('markdown' | 'json'): 출력 형식 (기본: markdown)
+  - response_format ('markdown' | 'json' | 'table'): 출력 형식 (기본: markdown)
 
 Examples:
   - 삼성전자 베타 조회: stock_codes=["005930"]
