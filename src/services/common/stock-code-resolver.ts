@@ -2,9 +2,50 @@ import axios from "axios";
 import { DART_API_BASE, DART_ENDPOINTS } from "../opendart/constants";
 import type { DartCompanyInfo } from "../opendart/types";
 
-// 인메모리 캐시: stockCode(6자리) → corpCode(8자리)
-const stockToCorpCache = new Map<string, string>();
-// 인메모리 캐시: stockCode(6자리) → 기업정보
+// ─── Corp code JSON 캐시 ───
+
+interface CorpCodeEntry {
+  corp_code: string;
+  corp_name: string;
+  stock_code: string;
+  modify_date: string;
+}
+
+interface CorpCodeCache {
+  entries: CorpCodeEntry[];
+  byCorpCode: Map<string, CorpCodeEntry>;
+  byStockCode: Map<string, CorpCodeEntry>;
+}
+
+let cache: CorpCodeCache | null = null;
+
+function initCache(): CorpCodeCache {
+  if (cache) return cache;
+
+  // data/corp-codes.json을 빌드 시 번들에 포함 (scripts/update-corp-codes.ts로 생성)
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const corpCodesData = require("../../../data/corp-codes.json") as CorpCodeEntry[];
+
+  const byCorpCode = new Map<string, CorpCodeEntry>();
+  const byStockCode = new Map<string, CorpCodeEntry>();
+
+  for (const entry of corpCodesData) {
+    byCorpCode.set(entry.corp_code, entry);
+    if (entry.stock_code) {
+      // stock_code가 "5930" 같이 앞 0이 빠진 경우 6자리로 패딩
+      const padded = entry.stock_code.padStart(6, "0");
+      byStockCode.set(padded, entry);
+      byStockCode.set(entry.stock_code, entry);
+    }
+  }
+
+  cache = { entries: corpCodesData, byCorpCode, byStockCode };
+  console.log(`[StockResolver] Loaded ${corpCodesData.length} companies (${byStockCode.size} listed)`);
+  return cache;
+}
+
+// ─── 기업정보 캐시 ───
+
 const companyInfoCache = new Map<string, DartCompanyInfo>();
 
 function getApiKey(): string {
@@ -15,130 +56,99 @@ function getApiKey(): string {
   return key;
 }
 
+// ─── 공개 API ───
+
 /**
  * 6자리 종목코드 → 8자리 DART corp_code 변환
- *
- * 전략:
- * 1. 종목코드 → 네이버 자동완성 API로 회사명 조회
- * 2. 회사명 → DART list.json의 corp_name 파라미터로 공시 검색 → corp_code 획득
- * 3. corp_code → DART company.json으로 기업개황 조회
+ * corp-codes.json에서 즉시 조회 (API 호출 불필요)
  */
 export async function resolveCorpCode(stockCode: string): Promise<string> {
-  const cached = stockToCorpCache.get(stockCode);
+  const c = initCache();
+  const entry = c.byStockCode.get(stockCode);
+  if (entry) {
+    return entry.corp_code;
+  }
+  throw new Error(`종목코드 ${stockCode}에 해당하는 DART 기업코드를 찾을 수 없습니다.`);
+}
+
+/**
+ * 종목코드에 대한 기업정보 조회 (캐시 우선, 없으면 DART API 호출)
+ */
+export async function getCompanyInfo(stockCode: string): Promise<DartCompanyInfo> {
+  const cached = companyInfoCache.get(stockCode);
   if (cached) return cached;
 
-  // Step 1: 네이버 자동완성으로 회사명 획득
-  const companyName = await getCompanyNameFromNaver(stockCode);
-  if (!companyName) {
-    throw new Error(`종목코드 ${stockCode}에 해당하는 회사를 찾을 수 없습니다. (네이버 검색 실패)`);
-  }
+  const corpCode = await resolveCorpCode(stockCode);
 
-  // Step 2: DART list.json에 corp_name으로 검색 → corp_code 획득
-  const corpCode = await searchDartByCorpName(companyName);
-  if (!corpCode) {
-    throw new Error(`'${companyName}'(${stockCode})의 DART corp_code를 찾을 수 없습니다. (DART 공시검색 실패)`);
-  }
-
-  // Step 3: corp_code로 기업개황 조회
+  // DART company.json으로 상세 기업정보 조회
   try {
-    const companyResponse = await axios.get<DartCompanyInfo>(`${DART_API_BASE}${DART_ENDPOINTS.COMPANY}`, {
+    const response = await axios.get<DartCompanyInfo>(`${DART_API_BASE}${DART_ENDPOINTS.COMPANY}`, {
       params: { crtfc_key: getApiKey(), corp_code: corpCode },
       timeout: 15000,
     });
 
-    if (companyResponse.data.status === "000") {
-      stockToCorpCache.set(stockCode, corpCode);
-      companyInfoCache.set(stockCode, companyResponse.data);
-      return corpCode;
+    if (response.data.status === "000") {
+      companyInfoCache.set(stockCode, response.data);
+      return response.data;
     }
   } catch {
-    // 기업개황 조회 실패해도 corp_code는 반환
+    // API 호출 실패 시 기본 정보로 대체
   }
 
-  // 기업개황 조회 실패 시 최소 정보로 캐시
-  stockToCorpCache.set(stockCode, corpCode);
-  companyInfoCache.set(stockCode, {
+  // corp-codes.json의 기본 정보로 fallback
+  const c = initCache();
+  const entry = c.byStockCode.get(stockCode);
+  const fallback: DartCompanyInfo = {
     status: "000",
-    message: "정상",
+    message: "정상 (local cache)",
     corp_code: corpCode,
-    corp_name: companyName,
+    corp_name: entry?.corp_name ?? "",
     corp_name_eng: "",
-    stock_name: companyName,
+    stock_name: entry?.corp_name ?? "",
     stock_code: stockCode,
     ceo_nm: "",
     corp_cls: "",
     induty_code: "",
     est_dt: "",
     acc_mt: "",
-  });
-
-  return corpCode;
+  };
+  companyInfoCache.set(stockCode, fallback);
+  return fallback;
 }
 
 /**
- * 네이버 자동완성 API로 종목코드 → 회사명 조회
+ * 회사명/종목코드/corp_code로 검색 (fuzzy 지원)
  */
-async function getCompanyNameFromNaver(stockCode: string): Promise<string | null> {
-  try {
-    const response = await axios.get<{ items: Array<{ code: string; name: string }> }>(
-      "https://ac.stock.naver.com/ac",
-      {
-        params: { q: stockCode, target: "stock" },
-        headers: { "User-Agent": "Mozilla/5.0 (compatible; ValuationMCP/1.0)" },
-        timeout: 10000,
-      }
-    );
+export function searchCompanies(query: string, limit: number = 10): CorpCodeEntry[] {
+  const c = initCache();
+  const q = query.trim();
+  if (!q) return [];
 
-    const match = response.data.items?.find((item) => item.code === stockCode);
-    return match?.name ?? null;
-  } catch {
-    return null;
+  // 1. 종목코드 정확 매칭
+  const byStock = c.byStockCode.get(q);
+  if (byStock) return [byStock];
+
+  // 2. corp_code 정확 매칭
+  const byCode = c.byCorpCode.get(q);
+  if (byCode) return [byCode];
+
+  // 3. 이름 검색: exact > prefix > contains (상장 우선)
+  const qLower = q.toLowerCase().replace(/\s/g, "");
+  const exact: CorpCodeEntry[] = [];
+  const prefix: CorpCodeEntry[] = [];
+  const contains: CorpCodeEntry[] = [];
+
+  for (const entry of c.entries) {
+    const name = entry.corp_name.toLowerCase().replace(/\s/g, "");
+    if (name === qLower) exact.push(entry);
+    else if (name.startsWith(qLower)) prefix.push(entry);
+    else if (name.includes(qLower)) contains.push(entry);
+
+    if (exact.length + prefix.length + contains.length >= limit * 3) break;
   }
-}
 
-/**
- * DART list.json API에 corp_name으로 검색하여 corp_code 획득
- */
-async function searchDartByCorpName(corpName: string): Promise<string | null> {
-  try {
-    const response = await axios.get(`${DART_API_BASE}/list.json`, {
-      params: {
-        crtfc_key: getApiKey(),
-        corp_name: corpName,
-        page_count: 1,
-        page_no: 1,
-      },
-      timeout: 15000,
-    });
-
-    if (response.data.status === "000" && response.data.list?.length > 0) {
-      return response.data.list[0].corp_code;
-    }
-
-    return null;
-  } catch {
-    return null;
-  }
-}
-
-/**
- * 캐시된 기업정보 반환
- */
-export function getCachedCompanyInfo(stockCode: string): DartCompanyInfo | undefined {
-  return companyInfoCache.get(stockCode);
-}
-
-/**
- * 종목코드에 대한 기업정보를 조회 (캐시 우선, 없으면 API 호출)
- */
-export async function getCompanyInfo(stockCode: string): Promise<DartCompanyInfo> {
-  const cached = companyInfoCache.get(stockCode);
-  if (cached) return cached;
-
-  await resolveCorpCode(stockCode);
-  const info = companyInfoCache.get(stockCode);
-  if (!info) {
-    throw new Error(`종목코드 ${stockCode}의 기업정보를 가져올 수 없습니다.`);
-  }
-  return info;
+  const results = [...exact, ...prefix, ...contains];
+  // 상장 기업 우선 정렬
+  results.sort((a, b) => (a.stock_code ? 0 : 1) - (b.stock_code ? 0 : 1));
+  return results.slice(0, limit);
 }

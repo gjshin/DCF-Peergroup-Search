@@ -13,6 +13,8 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.26.0",
     "axios": "^1.7.9",
+    "fast-xml-parser": "^5.5.9",
+    "fflate": "^0.8.2",
     "mcp-handler": "^1.1.0",
     "next": "^15.3.0",
     "react": "^19.0.0",
