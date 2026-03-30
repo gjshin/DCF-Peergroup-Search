@@ -45,9 +45,12 @@ export async function resolveCorpCode(stockCode: string): Promise<string> {
 async function searchCompanyByStockCode(stockCode: string): Promise<DartCompanyInfo | null> {
   // 방법: 공시검색 API에서 종목코드로 검색하여 corp_code 획득
   try {
+    const apiKey = getApiKey();
+    console.log(`[StockResolver] Searching DART for stock_code=${stockCode}, API key length=${apiKey.length}`);
+
     const searchResponse = await axios.get(`${DART_API_BASE}/list.json`, {
       params: {
-        crtfc_key: getApiKey(),
+        crtfc_key: apiKey,
         stock_code: stockCode,
         page_count: 1,
         page_no: 1,
@@ -55,14 +58,17 @@ async function searchCompanyByStockCode(stockCode: string): Promise<DartCompanyI
       timeout: 15000,
     });
 
+    console.log(`[StockResolver] list.json response: status=${searchResponse.data.status}, message=${searchResponse.data.message}, listCount=${searchResponse.data.list?.length ?? 0}`);
+
     if (searchResponse.data.status === "000" && searchResponse.data.list?.length > 0) {
       const corpCode = searchResponse.data.list[0].corp_code;
       const corpName = searchResponse.data.list[0].corp_name;
+      console.log(`[StockResolver] Found corp_code=${corpCode}, corp_name=${corpName}`);
 
       // corp_code로 기업개황 조회
       const companyResponse = await axios.get<DartCompanyInfo>(`${DART_API_BASE}${DART_ENDPOINTS.COMPANY}`, {
         params: {
-          crtfc_key: getApiKey(),
+          crtfc_key: apiKey,
           corp_code: corpCode,
         },
         timeout: 15000,
@@ -71,6 +77,8 @@ async function searchCompanyByStockCode(stockCode: string): Promise<DartCompanyI
       if (companyResponse.data.status === "000") {
         return companyResponse.data;
       }
+
+      console.log(`[StockResolver] company.json failed: status=${companyResponse.data.status}, message=${companyResponse.data.message}`);
 
       // 기업개황 조회 실패해도 기본 정보는 반환
       return {
@@ -89,8 +97,11 @@ async function searchCompanyByStockCode(stockCode: string): Promise<DartCompanyI
       };
     }
 
+    // API 호출은 성공했지만 결과가 없는 경우
+    console.log(`[StockResolver] No results found. DART status=${searchResponse.data.status}, message=${searchResponse.data.message}`);
     return null;
-  } catch {
+  } catch (error) {
+    console.error(`[StockResolver] Error searching for stock_code=${stockCode}:`, error instanceof Error ? error.message : error);
     return null;
   }
 }
