@@ -26,15 +26,14 @@ export async function resolveCorpCode(stockCode: string): Promise<string> {
 
   // OpenDART company.json은 corp_code로만 검색 가능하므로,
   // 종목코드로 기업을 찾으려면 공시검색 API를 활용
-  // 또는 DART 기업코드 검색 API 활용
-  const companyInfo = await searchCompanyByStockCode(stockCode);
-  if (companyInfo) {
-    stockToCorpCache.set(stockCode, companyInfo.corp_code);
-    companyInfoCache.set(stockCode, companyInfo);
-    return companyInfo.corp_code;
+  const { info, debugMsg } = await searchCompanyByStockCode(stockCode);
+  if (info) {
+    stockToCorpCache.set(stockCode, info.corp_code);
+    companyInfoCache.set(stockCode, info);
+    return info.corp_code;
   }
 
-  throw new Error(`종목코드 ${stockCode}에 해당하는 DART 기업코드를 찾을 수 없습니다.`);
+  throw new Error(`종목코드 ${stockCode}에 해당하는 DART 기업코드를 찾을 수 없습니다. (${debugMsg})`);
 }
 
 /**
@@ -42,7 +41,7 @@ export async function resolveCorpCode(stockCode: string): Promise<string> {
  * OpenDART의 기업개황 API는 corp_code만 받으므로,
  * 공시검색을 통해 stock_code → corp_code 매핑을 수행
  */
-async function searchCompanyByStockCode(stockCode: string): Promise<DartCompanyInfo | null> {
+async function searchCompanyByStockCode(stockCode: string): Promise<{ info: DartCompanyInfo | null; debugMsg: string }> {
   // 방법: 공시검색 API에서 종목코드로 검색하여 corp_code 획득
   try {
     const apiKey = getApiKey();
@@ -75,34 +74,39 @@ async function searchCompanyByStockCode(stockCode: string): Promise<DartCompanyI
       });
 
       if (companyResponse.data.status === "000") {
-        return companyResponse.data;
+        return { info: companyResponse.data, debugMsg: "OK" };
       }
 
       console.log(`[StockResolver] company.json failed: status=${companyResponse.data.status}, message=${companyResponse.data.message}`);
 
       // 기업개황 조회 실패해도 기본 정보는 반환
       return {
-        status: "000",
-        message: "정상",
-        corp_code: corpCode,
-        corp_name: corpName,
-        corp_name_eng: "",
-        stock_name: "",
-        stock_code: stockCode,
-        ceo_nm: "",
-        corp_cls: "",
-        induty_code: "",
-        est_dt: "",
-        acc_mt: "",
+        info: {
+          status: "000",
+          message: "정상",
+          corp_code: corpCode,
+          corp_name: corpName,
+          corp_name_eng: "",
+          stock_name: "",
+          stock_code: stockCode,
+          ceo_nm: "",
+          corp_cls: "",
+          induty_code: "",
+          est_dt: "",
+          acc_mt: "",
+        },
+        debugMsg: "OK (company.json fallback)",
       };
     }
 
     // API 호출은 성공했지만 결과가 없는 경우
-    console.log(`[StockResolver] No results found. DART status=${searchResponse.data.status}, message=${searchResponse.data.message}`);
-    return null;
+    const msg = `DART list.json status=${searchResponse.data.status}, message=${searchResponse.data.message}`;
+    console.log(`[StockResolver] ${msg}`);
+    return { info: null, debugMsg: msg };
   } catch (error) {
-    console.error(`[StockResolver] Error searching for stock_code=${stockCode}:`, error instanceof Error ? error.message : error);
-    return null;
+    const msg = error instanceof Error ? error.message : String(error);
+    console.error(`[StockResolver] Error: ${msg}`);
+    return { info: null, debugMsg: `Exception: ${msg}` };
   }
 }
 
