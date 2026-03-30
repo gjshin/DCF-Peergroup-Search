@@ -1,9 +1,9 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { fetchBetaData } from "../koscom-client";
+import { fetchBetaData } from "../kicpa/client";
 import { handleApiError } from "../utils/error-handler";
 import { formatBetaResultsMarkdown, formatBetaResultsJson } from "../utils/formatters";
-import { MAX_STOCK_CODES } from "../constants";
+import { MAX_STOCK_CODES } from "../kicpa/constants";
 
 const GetBetaInputSchema = z.object({
   stock_codes: z.array(z.string().min(1))

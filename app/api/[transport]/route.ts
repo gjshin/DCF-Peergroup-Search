@@ -1,11 +1,26 @@
 import { createMcpHandler } from "mcp-handler";
 import { registerGetBetaTool } from "@/services/tools/get-beta";
 import { registerSearchStockTool } from "@/services/tools/search-stock";
+import { registerDartCompanyTool } from "@/services/tools/dart-company";
+import { registerDartFinancialsTool } from "@/services/tools/dart-financials";
+import { registerNaverMarketDataTool } from "@/services/tools/naver-market-data";
+import { registerValuationDataTool } from "@/services/tools/valuation-data";
 
 const handler = createMcpHandler(
   (server) => {
+    // KICPA (기존)
     registerGetBetaTool(server);
     registerSearchStockTool(server);
+
+    // OpenDART (신규)
+    registerDartCompanyTool(server);
+    registerDartFinancialsTool(server);
+
+    // 네이버 금융 (신규)
+    registerNaverMarketDataTool(server);
+
+    // 통합 밸류에이션 (신규)
+    registerValuationDataTool(server);
   },
   {},
   {

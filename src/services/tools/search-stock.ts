@@ -1,8 +1,8 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import axios from "axios";
-import { API_BASE_URL, ENDPOINTS, COUNTRY_CODE } from "../constants";
-import { getSessionCookie } from "../auth";
+import { API_BASE_URL, ENDPOINTS, COUNTRY_CODE } from "../kicpa/constants";
+import { getSessionCookie } from "../kicpa/auth";
 import { handleApiError } from "../utils/error-handler";
 
 const SearchStockInputSchema = z.object({

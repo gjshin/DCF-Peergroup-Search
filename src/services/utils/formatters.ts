@@ -1,4 +1,4 @@
-import type { StockBetaResult } from "../types";
+import type { StockBetaResult } from "../kicpa/types";
 
 export function formatBetaResultsMarkdown(results: StockBetaResult[]): string {
   if (results.length === 0) {
