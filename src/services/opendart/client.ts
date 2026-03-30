@@ -1,6 +1,25 @@
 import axios from "axios";
-import { DART_API_BASE, DART_ENDPOINTS, INTEREST_BEARING_DEBT_PATTERNS, NON_CONTROLLING_INTEREST_PATTERNS, REPORT_CODE_LABEL } from "./constants";
-import type { DartCompanyInfo, DartFinancialResponse, DartFinancialItem, DartStockQuantityResponse, SharesInfo, DebtSummary } from "./types";
+import {
+  DART_API_BASE,
+  DART_ENDPOINTS,
+  IBD_CURRENT_PATTERNS,
+  IBD_NON_CURRENT_PATTERNS,
+  LEASE_LIABILITY_KEYWORD,
+  NON_CONTROLLING_INTEREST_PATTERNS,
+  PRETAX_INCOME_PATTERNS,
+  VALUATION_ACCOUNT_PATTERNS,
+  REPORT_CODE_LABEL,
+} from "./constants";
+import type {
+  DartCompanyInfo,
+  DartFinancialResponse,
+  DartFinancialItem,
+  DartStockQuantityResponse,
+  SharesInfo,
+  DebtSummary,
+  DebtCategory,
+  ValuationFinancials,
+} from "./types";
 
 function getApiKey(): string {
   const key = process.env.OPENDART_API_KEY;
@@ -9,6 +28,8 @@ function getApiKey(): string {
   }
   return key;
 }
+
+// ─── 기업정보 ───
 
 export async function fetchCompanyInfo(corpCode: string): Promise<DartCompanyInfo> {
   const response = await axios.get<DartCompanyInfo>(`${DART_API_BASE}${DART_ENDPOINTS.COMPANY}`, {
@@ -23,13 +44,7 @@ export async function fetchCompanyInfo(corpCode: string): Promise<DartCompanyInf
   return response.data;
 }
 
-export async function fetchCompanyByStockCode(stockCode: string): Promise<DartCompanyInfo> {
-  // OpenDART company.json은 corp_code로만 검색 가능
-  // stock_code로 검색하려면 corp_code 목록에서 매핑 필요
-  // 대안: corpCode.xml을 다운로드하거나, 다른 방법 사용
-  // 여기서는 stock-code-resolver를 통해 corp_code를 먼저 얻은 후 호출
-  throw new Error("Use stock-code-resolver to get corp_code first");
-}
+// ─── 재무제표 ───
 
 export async function fetchFinancials(
   corpCode: string,
@@ -49,15 +64,14 @@ export async function fetchFinancials(
   });
 
   if (response.data.status !== "000") {
-    // 013 = 조회된 데이터가 없습니다
-    if (response.data.status === "013") {
-      return [];
-    }
+    if (response.data.status === "013") return [];
     throw new Error(`DART_ERROR: ${response.data.message} (status: ${response.data.status})`);
   }
 
   return response.data.list ?? [];
 }
+
+// ─── 주식수 ───
 
 export async function fetchStockQuantity(
   corpCode: string,
@@ -81,10 +95,11 @@ export async function fetchStockQuantity(
   return response.data;
 }
 
+// ─── 데이터 추출 ───
+
 export function extractSharesInfo(response: DartStockQuantityResponse, year: string, reportCode: string): SharesInfo | null {
   if (!response.list || response.list.length === 0) return null;
 
-  // 보통주 항목 찾기
   const commonStock = response.list.find(
     (item) => item.se === "보통주" || item.se.includes("보통주")
   );
@@ -106,30 +121,92 @@ export function extractSharesInfo(response: DartStockQuantityResponse, year: str
   };
 }
 
+/**
+ * 이자부부채를 유동/비유동으로 분류하여 추출
+ */
 export function extractDebtSummary(items: DartFinancialItem[]): DebtSummary {
-  const details: { account: string; amount: number; sjDiv: string }[] = [];
+  const current: DebtCategory = { total: 0, items: [] };
+  const nonCurrent: DebtCategory = { total: 0, items: [] };
   let nonControllingInterest: number | null = null;
+  let pretaxIncome: number | null = null;
 
   for (const item of items) {
     const amount = parseInt((item.thstrm_amount ?? "").replace(/[,\s]/g, ""), 10);
     if (isNaN(amount)) continue;
 
-    // 이자부부채 확인
-    if (INTEREST_BEARING_DEBT_PATTERNS.some((p) => item.account_nm.includes(p))) {
-      details.push({
-        account: item.account_nm,
-        amount,
-        sjDiv: item.sj_div,
-      });
+    const name = item.account_nm;
+
+    // 리스부채 — "유동" 포함 여부로 분류
+    if (name.includes(LEASE_LIABILITY_KEYWORD)) {
+      if (name.includes("유동")) {
+        current.total += amount;
+        current.items.push({ account: name, amount });
+      } else {
+        nonCurrent.total += amount;
+        nonCurrent.items.push({ account: name, amount });
+      }
+      continue;
     }
 
-    // 비지배지분 확인
-    if (NON_CONTROLLING_INTEREST_PATTERNS.some((p) => item.account_nm.includes(p))) {
+    // 유동 이자부부채
+    if (IBD_CURRENT_PATTERNS.some((p) => name.includes(p))) {
+      current.total += amount;
+      current.items.push({ account: name, amount });
+      continue;
+    }
+
+    // 비유동 이자부부채
+    if (IBD_NON_CURRENT_PATTERNS.some((p) => name.includes(p))) {
+      nonCurrent.total += amount;
+      nonCurrent.items.push({ account: name, amount });
+      continue;
+    }
+
+    // 비지배지분
+    if (NON_CONTROLLING_INTEREST_PATTERNS.some((p) => name.includes(p))) {
       nonControllingInterest = amount;
+      continue;
+    }
+
+    // 세전이익
+    if (PRETAX_INCOME_PATTERNS.some((p) => name.includes(p))) {
+      pretaxIncome = amount;
     }
   }
 
-  const interestBearingDebt = details.reduce((sum, d) => sum + d.amount, 0);
+  return {
+    interestBearingDebt: current.total + nonCurrent.total,
+    current,
+    nonCurrent,
+    nonControllingInterest,
+    pretaxIncome,
+  };
+}
 
-  return { interestBearingDebt, details, nonControllingInterest };
+/**
+ * 밸류에이션 모드: 전체 재무제표에서 필요한 계정만 필터링
+ * 50-70KB → 2-3KB로 감소
+ */
+export function filterForValuation(items: DartFinancialItem[]): DartFinancialItem[] {
+  return items.filter((item) =>
+    VALUATION_ACCOUNT_PATTERNS.some((pattern) => item.account_nm.includes(pattern))
+  );
+}
+
+/**
+ * 밸류에이션 필수 데이터만 추출 (IBD + 비지배지분 + 세전이익 + 주식수)
+ */
+export function extractValuationFinancials(items: DartFinancialItem[]): ValuationFinancials {
+  const debt = extractDebtSummary(items);
+
+  // 필터된 계정 목록 (참고용)
+  const filteredItems = filterForValuation(items).map((f) => ({
+    category: f.sj_nm,
+    sjDiv: f.sj_div,
+    account: f.account_nm,
+    currentAmount: f.thstrm_amount,
+    previousAmount: f.frmtrm_amount,
+  }));
+
+  return { debt, filteredItems };
 }

@@ -71,14 +71,31 @@ export interface SharesInfo {
   source: string;
 }
 
-export interface DebtDetail {
+export interface DebtItem {
   account: string;
   amount: number;
-  sjDiv: string;
+}
+
+export interface DebtCategory {
+  total: number;
+  items: DebtItem[];
 }
 
 export interface DebtSummary {
   interestBearingDebt: number;
-  details: DebtDetail[];
+  current: DebtCategory;
+  nonCurrent: DebtCategory;
   nonControllingInterest: number | null;
+  pretaxIncome: number | null;
+}
+
+export interface ValuationFinancials {
+  debt: DebtSummary;
+  filteredItems: Array<{
+    category: string;
+    sjDiv: string;
+    account: string;
+    currentAmount: string;
+    previousAmount: string;
+  }>;
 }

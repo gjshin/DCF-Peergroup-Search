@@ -2,7 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { fetchBetaData } from "../kicpa/client";
 import { handleApiError } from "../utils/error-handler";
-import { formatBetaResultsMarkdown, formatBetaResultsJson } from "../utils/formatters";
+import { formatBetaResultsMarkdown, formatBetaResultsJson, formatBetaResultsTable } from "../utils/formatters";
 import { MAX_STOCK_CODES } from "../kicpa/constants";
 
 const GetBetaInputSchema = z.object({
@@ -23,9 +23,9 @@ const GetBetaInputSchema = z.object({
   beta_periods: z.array(z.enum(["1Y", "2Y", "3Y", "5Y"]))
     .default(["1Y", "2Y", "3Y", "5Y"])
     .describe("베타 산출 기간: 1Y(1년), 2Y(2년), 3Y(3년), 5Y(5년). 기본값은 전체"),
-  response_format: z.enum(["markdown", "json"])
+  response_format: z.enum(["markdown", "json", "table"])
     .default("markdown")
-    .describe("출력 형식: markdown(사람이 읽기 좋은 표) 또는 json(기계 처리용)"),
+    .describe("출력 형식: markdown, json, table(TSV, 엑셀 붙여넣기용)"),
 }).strict();
 
 type GetBetaInput = z.infer<typeof GetBetaInputSchema>;
@@ -83,9 +83,14 @@ Examples:
           };
         }
 
-        const text = params.response_format === "json"
-          ? formatBetaResultsJson(results)
-          : formatBetaResultsMarkdown(results);
+        let text: string;
+        if (params.response_format === "json") {
+          text = formatBetaResultsJson(results);
+        } else if (params.response_format === "table") {
+          text = formatBetaResultsTable(results);
+        } else {
+          text = formatBetaResultsMarkdown(results);
+        }
 
         return {
           content: [{ type: "text" as const, text }],
