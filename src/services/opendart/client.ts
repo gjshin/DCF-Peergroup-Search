@@ -192,7 +192,9 @@ export function extractDebtSummary(items: DartFinancialItem[]): DebtSummary {
  * 50-70KB → 2-3KB로 감소
  */
 export function filterForValuation(items: DartFinancialItem[]): DartFinancialItem[] {
+  const allowedSjDiv = new Set(["BS", "IS", "CIS"]);
   return items.filter((item) =>
+    allowedSjDiv.has(item.sj_div) &&
     VALUATION_ACCOUNT_PATTERNS.some((pattern) => item.account_nm.includes(pattern))
   );
 }
