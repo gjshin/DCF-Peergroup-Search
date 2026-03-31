@@ -21,51 +21,90 @@ export const REPORT_CODE_LABEL: Record<string, string> = {
   "11014": "3분기보고서",
 };
 
-// 이자부부채 계정명 패턴 — 유동/비유동 분류
+// ─── XBRL account_id 기반 매칭 (1차) ───
+
+// 이자부부채 — 유동
+export const IBD_CURRENT_ACCOUNT_IDS = new Set([
+  "ifrs-full_ShorttermBorrowings",                      // 단기차입금
+  "ifrs-full_CurrentPortionOfLongtermBorrowings",        // 유동성장기차입금
+  "dart_CurrentPortionOfBonds",                          // 유동성사채
+  "dart_CurrentPortionOfConvertibleBonds",               // 유동성전환사채
+  "dart_CurrentPortionOfBondWithWarrant",                // 유동성신주인수권부사채
+  "dart_CurrentPortionOfExchangeableBond",               // 유동성교환사채
+  "dart_CurentPortionOfFinanceLeaseLiabilities",         // 유동금융리스부채
+  "ifrs-full_CurrentLeaseLiabilities",                   // 유동리스부채
+]);
+
+// 이자부부채 — 비유동
+export const IBD_NON_CURRENT_ACCOUNT_IDS = new Set([
+  "dart_LongTermBorrowingsGross",                        // 장기차입금(총액)
+  "ifrs-full_LongtermBorrowings",                        // 장기차입금
+  "ifrs-full_NoncurrentPortionOfNoncurrentLoansReceived", // 장기차입금(삼성전자 등)
+  "dart_BondsIssued",                                    // 사채
+  "ifrs-full_NoncurrentPortionOfNoncurrentBondsIssued",  // 사채(삼성전자 등)
+  "dart_ConvertibleBonds",                               // 전환사채
+  "dart_BondWithWarrant",                                // 신주인수권부사채
+  "dart_ExchangeableBonds",                              // 교환사채
+  "dart_ExchangeableBondsNet",                           // 교환사채(순액)
+  "dart_NonCurrentFinanceLeaseLiabilities",              // 비유동금융리스부채
+  "ifrs-full_NoncurrentLeaseLiabilities",                // 비유동리스부채
+]);
+
+// 비지배지분
+export const NCI_ACCOUNT_IDS = new Set([
+  "ifrs-full_NoncontrollingInterests",
+]);
+
+// 세전이익
+export const PRETAX_ACCOUNT_IDS = new Set([
+  "ifrs-full_ProfitLossBeforeTax",
+]);
+
+// ─── 계정명 폴백 (account_id가 "-표준계정코드 미사용-"일 때) ───
+
 export const IBD_CURRENT_PATTERNS = [
-  "단기차입금",
-  "유동성장기부채",
-  "유동성장기차입금",
-  "유동성사채",
-  "유동성전환사채",
-  "유동성신주인수권부사채",
-  "유동성교환사채",
+  "단기차입금", "단기차입부채",
+  "유동성장기부채", "유동성장기차입금",
+  "유동성사채", "유동성전환사채", "유동성신주인수권부사채", "유동성교환사채",
   "단기사채",
 ];
 
 export const IBD_NON_CURRENT_PATTERNS = [
   "장기차입금",
-  "사채",
-  "전환사채",
-  "신주인수권부사채",
-  "교환사채",
+  "사채", "전환사채", "신주인수권부사채", "교환사채",
 ];
 
-// 리스부채는 "유동" 포함 여부로 분류
 export const LEASE_LIABILITY_KEYWORD = "리스부채";
 
-// 모든 IBD 패턴 (flat, 기존 호환)
+export const NON_CONTROLLING_INTEREST_PATTERNS = [
+  "비지배지분", "소수주주지분",
+];
+
+export const PRETAX_INCOME_PATTERNS = [
+  "법인세비용차감전", "법인세차감전",
+];
+
+// ─── valuation 모드 필터링용 (account_id + 이름 둘 다) ───
+
+export const ALL_IBD_ACCOUNT_IDS = new Set([
+  ...IBD_CURRENT_ACCOUNT_IDS,
+  ...IBD_NON_CURRENT_ACCOUNT_IDS,
+]);
+
 export const ALL_IBD_PATTERNS = [
   ...IBD_CURRENT_PATTERNS,
   ...IBD_NON_CURRENT_PATTERNS,
   LEASE_LIABILITY_KEYWORD,
 ];
 
-// 비지배지분 계정명 패턴
-export const NON_CONTROLLING_INTEREST_PATTERNS = [
-  "비지배지분",
-  "소수주주지분",
-];
-
-// 세전이익 계정명 패턴 (한계세율 산출용)
-export const PRETAX_INCOME_PATTERNS = [
-  "법인세비용차감전",
-  "법인세차감전",
-];
-
-// valuation 모드에서 필터링할 모든 계정 키워드
 export const VALUATION_ACCOUNT_PATTERNS = [
   ...ALL_IBD_PATTERNS,
   ...NON_CONTROLLING_INTEREST_PATTERNS,
   ...PRETAX_INCOME_PATTERNS,
 ];
+
+export const VALUATION_ACCOUNT_IDS = new Set([
+  ...ALL_IBD_ACCOUNT_IDS,
+  ...NCI_ACCOUNT_IDS,
+  ...PRETAX_ACCOUNT_IDS,
+]);

@@ -16,12 +16,15 @@ export interface DartCompanyInfo {
 export interface DartFinancialItem {
   rcept_no: string;
   bsns_year: string;
-  stock_code: string;
+  stock_code?: string;
+  corp_code?: string;
   reprt_code: string;
+  account_id: string; // XBRL 계정코드 (e.g. "ifrs-full_ShorttermBorrowings", "-표준계정코드 미사용-")
   account_nm: string;
+  account_detail?: string;
   fs_div: string; // OFS=개별, CFS=연결
   fs_nm: string;
-  sj_div: string; // BS=재무상태표, IS=손익계산서
+  sj_div: string; // BS=재무상태표, IS=손익계산서, CIS=포괄손익계산서
   sj_nm: string;
   thstrm_nm: string;
   thstrm_dt: string;

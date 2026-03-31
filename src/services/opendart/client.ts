@@ -2,11 +2,16 @@ import axios from "axios";
 import {
   DART_API_BASE,
   DART_ENDPOINTS,
+  IBD_CURRENT_ACCOUNT_IDS,
+  IBD_NON_CURRENT_ACCOUNT_IDS,
+  NCI_ACCOUNT_IDS,
+  PRETAX_ACCOUNT_IDS,
   IBD_CURRENT_PATTERNS,
   IBD_NON_CURRENT_PATTERNS,
   LEASE_LIABILITY_KEYWORD,
   NON_CONTROLLING_INTEREST_PATTERNS,
   PRETAX_INCOME_PATTERNS,
+  VALUATION_ACCOUNT_IDS,
   VALUATION_ACCOUNT_PATTERNS,
   REPORT_CODE_LABEL,
 } from "./constants";
@@ -123,6 +128,8 @@ export function extractSharesInfo(response: DartStockQuantityResponse, year: str
 
 /**
  * 이자부부채를 유동/비유동으로 분류하여 추출
+ * 1차: XBRL account_id로 매칭 (정확)
+ * 2차: account_id가 "-표준계정코드 미사용-"이면 계정명 폴백
  */
 export function extractDebtSummary(items: DartFinancialItem[]): DebtSummary {
   const current: DebtCategory = { total: 0, items: [] };
@@ -134,47 +141,65 @@ export function extractDebtSummary(items: DartFinancialItem[]): DebtSummary {
     const amount = parseInt((item.thstrm_amount ?? "").replace(/[,\s]/g, ""), 10);
     if (isNaN(amount)) continue;
 
+    const id = item.account_id ?? "";
     const name = item.account_nm;
-    const sjDiv = item.sj_div; // BS, IS, CIS, CF, SCE
+    const sjDiv = item.sj_div;
+    const hasStandardId = id !== "" && id !== "-표준계정코드 미사용-";
 
     // ── 이자부부채: BS(재무상태표) 항목만 ──
     if (sjDiv === "BS") {
-      // 리스부채 — "유동/단기" → 유동, "비유동/장기" 또는 기타 → 비유동
-      if (name.includes(LEASE_LIABILITY_KEYWORD)) {
-        if (name.includes("유동") || name.includes("단기")) {
+      // 1차: account_id 매칭
+      if (hasStandardId) {
+        if (IBD_CURRENT_ACCOUNT_IDS.has(id)) {
           current.total += amount;
           current.items.push({ account: name, amount });
-        } else {
+          continue;
+        }
+        if (IBD_NON_CURRENT_ACCOUNT_IDS.has(id)) {
           nonCurrent.total += amount;
           nonCurrent.items.push({ account: name, amount });
+          continue;
         }
-        continue;
-      }
-
-      // 유동 이자부부채 (유동성~ 패턴을 먼저 체크)
-      if (IBD_CURRENT_PATTERNS.some((p) => name.includes(p))) {
-        current.total += amount;
-        current.items.push({ account: name, amount });
-        continue;
-      }
-
-      // 비유동 이자부부채
-      if (IBD_NON_CURRENT_PATTERNS.some((p) => name.includes(p))) {
-        nonCurrent.total += amount;
-        nonCurrent.items.push({ account: name, amount });
-        continue;
-      }
-
-      // 비지배지분 (BS)
-      if (NON_CONTROLLING_INTEREST_PATTERNS.some((p) => name.includes(p))) {
-        nonControllingInterest = amount;
-        continue;
+        if (NCI_ACCOUNT_IDS.has(id)) {
+          nonControllingInterest = amount;
+          continue;
+        }
+      } else {
+        // 2차: 계정명 폴백 (표준코드 미사용 기업)
+        if (name.includes(LEASE_LIABILITY_KEYWORD)) {
+          if (name.includes("유동") || name.includes("단기")) {
+            current.total += amount;
+            current.items.push({ account: name, amount });
+          } else {
+            nonCurrent.total += amount;
+            nonCurrent.items.push({ account: name, amount });
+          }
+          continue;
+        }
+        if (IBD_CURRENT_PATTERNS.some((p) => name.includes(p))) {
+          current.total += amount;
+          current.items.push({ account: name, amount });
+          continue;
+        }
+        if (IBD_NON_CURRENT_PATTERNS.some((p) => name.includes(p))) {
+          nonCurrent.total += amount;
+          nonCurrent.items.push({ account: name, amount });
+          continue;
+        }
+        if (NON_CONTROLLING_INTEREST_PATTERNS.some((p) => name.includes(p))) {
+          nonControllingInterest = amount;
+          continue;
+        }
       }
     }
 
     // ── 세전이익: IS/CIS(손익계산서) 항목만 ──
-    if ((sjDiv === "IS" || sjDiv === "CIS") && PRETAX_INCOME_PATTERNS.some((p) => name.includes(p))) {
-      pretaxIncome = amount;
+    if (sjDiv === "IS" || sjDiv === "CIS") {
+      if (hasStandardId && PRETAX_ACCOUNT_IDS.has(id)) {
+        pretaxIncome = amount;
+      } else if (!hasStandardId && PRETAX_INCOME_PATTERNS.some((p) => name.includes(p))) {
+        pretaxIncome = amount;
+      }
     }
   }
 
@@ -193,10 +218,12 @@ export function extractDebtSummary(items: DartFinancialItem[]): DebtSummary {
  */
 export function filterForValuation(items: DartFinancialItem[]): DartFinancialItem[] {
   const allowedSjDiv = new Set(["BS", "IS", "CIS"]);
-  return items.filter((item) =>
-    allowedSjDiv.has(item.sj_div) &&
-    VALUATION_ACCOUNT_PATTERNS.some((pattern) => item.account_nm.includes(pattern))
-  );
+  return items.filter((item) => {
+    if (!allowedSjDiv.has(item.sj_div)) return false;
+    const id = item.account_id ?? "";
+    if (id && id !== "-표준계정코드 미사용-" && VALUATION_ACCOUNT_IDS.has(id)) return true;
+    return VALUATION_ACCOUNT_PATTERNS.some((pattern) => item.account_nm.includes(pattern));
+  });
 }
 
 /**
