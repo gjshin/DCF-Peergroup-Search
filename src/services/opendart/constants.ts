@@ -59,10 +59,7 @@ export const NON_CONTROLLING_INTEREST_PATTERNS = [
 
 // 세전이익 계정명 패턴 (한계세율 산출용)
 export const PRETAX_INCOME_PATTERNS = [
-  "법인세비용차감전순이익",
-  "법인세비용차감전계속사업이익",
-  "법인세비용차감전순손익",
-  "법인세차감전순이익",
+  "법인세비용차감전",
   "법인세차감전",
 ];
 

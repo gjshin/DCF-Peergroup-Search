@@ -139,9 +139,9 @@ export function extractDebtSummary(items: DartFinancialItem[]): DebtSummary {
 
     // ── 이자부부채: BS(재무상태표) 항목만 ──
     if (sjDiv === "BS") {
-      // 리스부채 — "유동" 포함 여부로 분류
+      // 리스부채 — "유동/단기" → 유동, "비유동/장기" 또는 기타 → 비유동
       if (name.includes(LEASE_LIABILITY_KEYWORD)) {
-        if (name.includes("유동")) {
+        if (name.includes("유동") || name.includes("단기")) {
           current.total += amount;
           current.items.push({ account: name, amount });
         } else {
