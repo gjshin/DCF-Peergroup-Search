@@ -3,7 +3,7 @@ export const DART_API_BASE = "https://opendart.fss.or.kr/api";
 export const DART_ENDPOINTS = {
   COMPANY: "/company.json",
   FINANCIAL_SINGLE: "/fnlttSinglAcnt.json",
-  FINANCIAL_FULL: "/fnlttSinglAllAcnt.json",
+  FINANCIAL_FULL: "/fnlttSinglAcntAll.json",
   STOCK_QUANTITY: "/stockTotqySttus.json",
 } as const;
 
@@ -25,9 +25,11 @@ export const REPORT_CODE_LABEL: Record<string, string> = {
 export const IBD_CURRENT_PATTERNS = [
   "단기차입금",
   "유동성장기부채",
+  "유동성장기차입금",
   "유동성사채",
   "유동성전환사채",
   "유동성신주인수권부사채",
+  "유동성교환사채",
   "단기사채",
 ];
 
@@ -60,6 +62,8 @@ export const PRETAX_INCOME_PATTERNS = [
   "법인세비용차감전순이익",
   "법인세비용차감전계속사업이익",
   "법인세비용차감전순손익",
+  "법인세차감전순이익",
+  "법인세차감전",
 ];
 
 // valuation 모드에서 필터링할 모든 계정 키워드

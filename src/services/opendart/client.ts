@@ -52,7 +52,7 @@ export async function fetchFinancials(
   reportCode: string = "11011",
   fsDiv: string = "CFS"
 ): Promise<DartFinancialItem[]> {
-  const response = await axios.get<DartFinancialResponse>(`${DART_API_BASE}${DART_ENDPOINTS.FINANCIAL_SINGLE}`, {
+  const response = await axios.get<DartFinancialResponse>(`${DART_API_BASE}${DART_ENDPOINTS.FINANCIAL_FULL}`, {
     params: {
       crtfc_key: getApiKey(),
       corp_code: corpCode,
@@ -135,41 +135,45 @@ export function extractDebtSummary(items: DartFinancialItem[]): DebtSummary {
     if (isNaN(amount)) continue;
 
     const name = item.account_nm;
+    const sjDiv = item.sj_div; // BS, IS, CIS, CF, SCE
 
-    // 리스부채 — "유동" 포함 여부로 분류
-    if (name.includes(LEASE_LIABILITY_KEYWORD)) {
-      if (name.includes("유동")) {
+    // ── 이자부부채: BS(재무상태표) 항목만 ──
+    if (sjDiv === "BS") {
+      // 리스부채 — "유동" 포함 여부로 분류
+      if (name.includes(LEASE_LIABILITY_KEYWORD)) {
+        if (name.includes("유동")) {
+          current.total += amount;
+          current.items.push({ account: name, amount });
+        } else {
+          nonCurrent.total += amount;
+          nonCurrent.items.push({ account: name, amount });
+        }
+        continue;
+      }
+
+      // 유동 이자부부채 (유동성~ 패턴을 먼저 체크)
+      if (IBD_CURRENT_PATTERNS.some((p) => name.includes(p))) {
         current.total += amount;
         current.items.push({ account: name, amount });
-      } else {
+        continue;
+      }
+
+      // 비유동 이자부부채
+      if (IBD_NON_CURRENT_PATTERNS.some((p) => name.includes(p))) {
         nonCurrent.total += amount;
         nonCurrent.items.push({ account: name, amount });
+        continue;
       }
-      continue;
+
+      // 비지배지분 (BS)
+      if (NON_CONTROLLING_INTEREST_PATTERNS.some((p) => name.includes(p))) {
+        nonControllingInterest = amount;
+        continue;
+      }
     }
 
-    // 유동 이자부부채
-    if (IBD_CURRENT_PATTERNS.some((p) => name.includes(p))) {
-      current.total += amount;
-      current.items.push({ account: name, amount });
-      continue;
-    }
-
-    // 비유동 이자부부채
-    if (IBD_NON_CURRENT_PATTERNS.some((p) => name.includes(p))) {
-      nonCurrent.total += amount;
-      nonCurrent.items.push({ account: name, amount });
-      continue;
-    }
-
-    // 비지배지분
-    if (NON_CONTROLLING_INTEREST_PATTERNS.some((p) => name.includes(p))) {
-      nonControllingInterest = amount;
-      continue;
-    }
-
-    // 세전이익
-    if (PRETAX_INCOME_PATTERNS.some((p) => name.includes(p))) {
+    // ── 세전이익: IS/CIS(손익계산서) 항목만 ──
+    if ((sjDiv === "IS" || sjDiv === "CIS") && PRETAX_INCOME_PATTERNS.some((p) => name.includes(p))) {
       pretaxIncome = amount;
     }
   }
