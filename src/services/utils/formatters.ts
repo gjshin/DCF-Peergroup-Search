@@ -51,13 +51,16 @@ export function formatBetaResultsTable(results: StockBetaResult[]): string {
 
 // ─── 밸류에이션 TSV 포맷터 ───
 
+type BetaMap = Record<string, { raw: number; adjusted: number; dataPoints: number }>;
+
 export function formatValuationTable(data: {
   stockCode: string;
   company?: { name: string };
-  beta?: Record<string, { raw: number; adjusted: number; dataPoints: number }> | null;
+  betaWeekly?: BetaMap | null;
+  betaMonthly?: BetaMap | null;
   shares?: SharesInfo | null;
-  marketData?: Record<string, unknown> | null;
-  calculatedMarketCap?: number;
+  price?: number | null;
+  marketCap?: number | null;
   debt?: DebtSummary | null;
 }): string {
   const rows: string[] = [];
@@ -66,17 +69,9 @@ export function formatValuationTable(data: {
   rows.push(["종목코드", data.stockCode, ""].join("\t"));
   if (data.company) rows.push(["종목명", data.company.name, ""].join("\t"));
 
-  // 시장데이터
-  if (data.marketData) {
-    const md = data.marketData;
-    rows.push(["종가", String(md.price ?? ""), ""].join("\t"));
-    rows.push(["시가총액", String(md.marketCap ?? ""), "네이버금융"].join("\t"));
-    if (data.calculatedMarketCap) rows.push(["시가총액(산출)", String(data.calculatedMarketCap), "유통주식수×종가"].join("\t"));
-    rows.push(["PER", String(md.per ?? ""), ""].join("\t"));
-    rows.push(["PBR", String(md.pbr ?? ""), ""].join("\t"));
-    rows.push(["EPS", String(md.eps ?? ""), ""].join("\t"));
-    rows.push(["BPS", String(md.bps ?? ""), ""].join("\t"));
-  }
+  // 종가 + 시가총액
+  if (data.price != null) rows.push(["종가", String(data.price), ""].join("\t"));
+  if (data.marketCap != null) rows.push(["시가총액", String(data.marketCap), "유통주식수×종가"].join("\t"));
 
   // 주식수
   if (data.shares) {
@@ -85,11 +80,19 @@ export function formatValuationTable(data: {
     rows.push(["유통주식수", String(data.shares.outstanding), "발행-자기주식"].join("\t"));
   }
 
-  // 베타
-  if (data.beta) {
-    for (const [period, vals] of Object.entries(data.beta)) {
-      rows.push([`${period} 실질베타`, String(vals.raw), ""].join("\t"));
-      rows.push([`${period} 조정베타`, String(vals.adjusted), ""].join("\t"));
+  // 베타 Weekly
+  if (data.betaWeekly) {
+    for (const [period, vals] of Object.entries(data.betaWeekly)) {
+      rows.push([`Weekly ${period} 실질베타`, String(vals.raw), ""].join("\t"));
+      rows.push([`Weekly ${period} 조정베타`, String(vals.adjusted), ""].join("\t"));
+    }
+  }
+
+  // 베타 Monthly
+  if (data.betaMonthly) {
+    for (const [period, vals] of Object.entries(data.betaMonthly)) {
+      rows.push([`Monthly ${period} 실질베타`, String(vals.raw), ""].join("\t"));
+      rows.push([`Monthly ${period} 조정베타`, String(vals.adjusted), ""].join("\t"));
     }
   }
 
