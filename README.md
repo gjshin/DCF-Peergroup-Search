@@ -74,31 +74,9 @@ Vercel Dashboard에서 **New Project** → GitHub 저장소 선택 → 자동 �
 
 Vercel Dashboard → **Settings** → **Environment Variables**에서 아래 변수를 설정합니다.
 
-#### KICPA 인증 (베타계수 조회용)
+#### KICPA 베타계수
 
-**방식 A: 세션 쿠키 직접 입력 (권장)**
-
-| 변수명 | 값 |
-|--------|-----|
-| `KICPA_SESSION_ID` | 브라우저에서 복사한 JSESSIONID 값 |
-
-**JSESSIONID 얻는 방법:**
-
-1. 브라우저에서 https://datamall.koscom.co.kr 에 로그인
-2. **F12** (개발자 도구) → **Application** 탭 → **Cookies** → `datamall.koscom.co.kr` 클릭
-3. `JSESSIONID` 행의 **Value** 복사
-4. Vercel 환경변수 `KICPA_SESSION_ID`에 붙여넣기
-
-> 세션은 일정 시간 후 만료됩니다. 만료 시 위 과정을 반복하여 갱신해주세요.
-
-**방식 B: 자동 로그인**
-
-| 변수명 | 값 |
-|--------|-----|
-| `KICPA_USERNAME` | KICPA 회원 아이디 |
-| `KICPA_PASSWORD` | KICPA 회원 비밀번호 |
-
-> 서버가 자동으로 로그인하여 세션을 관리합니다. 세션 만료 시 자동 재로그인합니다.
+별도 인증 불필요 — 서버가 KOSCOM 페이지에 접속하여 JSESSIONID 세션 쿠키를 자동 획득합니다.
 
 #### OpenDART API (재무제표/기업정보 조회용)
 
@@ -162,9 +140,6 @@ Claude에게 다음과 같이 요청할 수 있습니다:
 
 ## 인증 관련 주의사항
 
-- KICPA 베타계수 조회는 **한국공인회계사회 회원 전용**입니다 (KICPA 계정 필요)
-- OpenDART 재무제표 조회는 **OpenDART API 키**가 필요합니다 (무료 발급)
+- KICPA 베타계수 조회는 별도 인증 불필요 (세션 자동 획득)
+- OpenDART 재무제표/기업정보 조회는 **OpenDART API 키**가 필요합니다 (무료 발급)
 - 네이버 금융 데이터 (종목검색, 시장데이터)는 별도 인증 불필요
-- 방식 A (세션 쿠키)는 단순하지만 주기적 갱신 필요
-- 방식 B (자동 로그인)는 편리하지만 KICPA 로그인 플로우 변경 시 동작하지 않을 수 있음
-- Vercel 서버리스 함수는 stateless이므로, 방식 B 사용 시 매 요청마다 세션 확인/재로그인이 발생할 수 있음
