@@ -21,6 +21,8 @@ const DartFinancialsInputSchema = z.object({
   response_format: z.enum(["markdown", "json", "table"])
     .default("markdown")
     .describe("출력 형식: markdown, json, table(TSV, 엑셀 붙여넣기용)"),
+  api_key: z.string().optional()
+    .describe("OpenDART API 키 (미입력 시 서버 환경변수 사용)"),
 }).strict();
 
 type DartFinancialsInput = z.infer<typeof DartFinancialsInputSchema>;
@@ -55,8 +57,8 @@ Args:
         const reportCode = REPORT_CODE[params.report_type];
 
         const [financials, stockQty] = await Promise.all([
-          fetchFinancials(corpCode, params.year, reportCode, params.fs_type),
-          fetchStockQuantity(corpCode, params.year, reportCode),
+          fetchFinancials(corpCode, params.year, reportCode, params.fs_type, params.api_key),
+          fetchStockQuantity(corpCode, params.year, reportCode, params.api_key),
         ]);
 
         if (financials.length === 0) {

@@ -2,149 +2,232 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { fetchBetaData } from "../kicpa/client";
 import { resolveCorpCode, getCompanyInfo } from "../common/stock-code-resolver";
-import { fetchFinancials, fetchStockQuantity, extractSharesInfo, extractDebtSummary } from "../opendart/client";
+import { fetchFinancials, fetchStockQuantity, extractSharesInfo, extractNciAndPretax, extractDebtSummary } from "../opendart/client";
 import { REPORT_CODE } from "../opendart/constants";
+import { extractDebtFromXbrl } from "../opendart/xbrl-parser";
 import { fetchMarketData } from "../naver/client";
 import { handleApiError } from "../utils/error-handler";
-import { formatValuationTable } from "../utils/formatters";
-import type { DebtSummary, SharesInfo } from "../opendart/types";
+import { getCachedValuation } from "../cache/valuation-cache";
+import { getIndustryName } from "../opendart/ksic-codes";
+import type { DebtSummary } from "../opendart/types";
+import type { BetaValues, StockBetaResult } from "../kicpa/types";
+
+// ─── 스키마 ───
 
 const ValuationDataInputSchema = z.object({
-  stock_code: z.string().min(1).max(10).describe("종목코드 6자리 (예: '005930')"),
-  year: z.string().regex(/^\d{4}$/).optional().describe("재무제표 사업연도 (기본: 전년도)"),
-  response_format: z.enum(["markdown", "json", "table"]).default("json").describe("출력 형식: markdown, json, table(TSV, 엑셀용)"),
+  stock_codes: z.union([
+    z.string().min(1).max(10),
+    z.array(z.string().min(1).max(10)).min(1).max(10),
+  ]).describe("종목코드 6자리. 단일 문자열 또는 최대 10개 배열 (예: '005930' 또는 ['005930','005380'])"),
+  valuation_date: z.string().regex(/^\d{8}$/).optional()
+    .describe("평가기준일 YYYYMMDD (기본: 오늘). 베타 조회일 및 사업연도 결정에 사용"),
+  year: z.string().regex(/^\d{4}$/).optional()
+    .describe("재무제표 사업연도 YYYY (기본: 평가기준일 연도)"),
+  api_key: z.string().optional()
+    .describe("OpenDART API 키 (미입력 시 서버 환경변수 사용)"),
 }).strict();
 
 type ValuationDataInput = z.infer<typeof ValuationDataInputSchema>;
+
+// ─── Compact JSON 출력 타입 ───
+
+interface CompactBeta {
+  weekly: Record<string, [number | null, number | null, number | null]> | null;
+  monthly: Record<string, [number | null, number | null, number | null]> | null;
+}
+
+interface CompactIBD {
+  current: [string, number][];
+  nonCurrent: [string, number][];
+  total: number;
+}
+
+export interface CompactResult {
+  code: string;
+  name: string | null;
+  industry: { code: string; name: string | null } | null;
+  year: string;
+  valuationDate: string;
+  beta: CompactBeta;
+  ibd: CompactIBD | null;
+  nci: number | null;
+  pretaxIncome: number | null;
+  marketCap: { price: number | null; shares: number | null; total: number | null };
+}
+
+// ─── 도구 등록 ───
 
 export function registerValuationDataTool(server: McpServer): void {
   server.registerTool(
     "valuation_get_data",
     {
-      title: "밸류에이션 통합 데이터 조회",
-      description: `한국기업 밸류에이션에 필요한 핵심 데이터를 한번에 조회합니다.
-KICPA(베타) + OpenDART(재무/주식수) + 네이버금융(종가)을 병렬 호출합니다.
+      title: "DCF 밸류에이션 데이터 조회",
+      description: `DCF 밸류에이션에 필요한 핵심 데이터를 조회합니다.
+KICPA(베타) + OpenDART(XBRL/재무/주식수) + 네이버금융(종가)을 병렬 호출합니다.
+최대 10개 종목을 한번에 배치 조회할 수 있습니다.
 
-반환 데이터:
-- 베타계수 Weekly/Monthly (1Y/2Y/3Y/5Y, 실질/조정)
-- 종가, 시가총액(유통주식수×종가)
-- 발행주식총수, 자기주식수, 유통주식수
-- 이자부부채 (유동/비유동 분류)
-- 비지배지분, 세전이익
+[사전 확인 — 이 도구를 호출하기 전에 사용자에게 아래 정보를 확인하세요]
+1. 종목코드 또는 회사명
+2. 평가기준일 (YYYYMMDD)
 
-Args:
-  - stock_code: 종목코드 6자리
-  - year: 재무제표 사업연도 (기본: 전년도)
-  - response_format: markdown/json/table(TSV)`,
+[반환 데이터 — compact JSON]
+- beta: Weekly/Monthly × 1Y/2Y/3Y/5Y — 값은 [실질베타, 조정베타, 포인트수] 배열
+- ibd: 유동/비유동 세부계정 — 값은 [계정명, 금액] 튜플
+- nci: 비지배지분, pretaxIncome: 세전이익
+- marketCap: { price, shares(유통주식수), total }
+
+[파라미터]
+- stock_codes: 종목코드 6자리 (단일 문자열 또는 최대 10개 배열)
+- valuation_date: 평가기준일 YYYYMMDD (기본: 오늘)
+- year: 재무제표 사업연도 (기본: 평가기준일 연도)`,
       inputSchema: ValuationDataInputSchema,
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     },
     async (params: ValuationDataInput) => {
-      const year = params.year ?? String(new Date().getFullYear() - 1);
-      const today = formatDate(new Date());
+      const valuationDate = params.valuation_date ?? formatDate(new Date());
+      const year = params.year ?? valuationDate.slice(0, 4);
+      const codes = Array.isArray(params.stock_codes) ? params.stock_codes : [params.stock_codes];
+      const apiKey = params.api_key;
 
       try {
-        const corpCode = await resolveCorpCode(params.stock_code);
+        // 0. 캐시 우선 조회
+        const cached: CompactResult[] = [];
+        const uncachedCodes: string[] = [];
 
-        // 베타: Weekly + Monthly 동시 조회
-        const [betaWeeklyResult, betaMonthlyResult, financialResult, stockQtyResult, marketResult, companyResult] = await Promise.allSettled([
-          fetchBetaData({
-            stockCodes: [params.stock_code],
-            date: today, country: "KR", periodType: "Weekly",
-            betaPeriods: ["1Y", "2Y", "3Y", "5Y"],
-          }),
-          fetchBetaData({
-            stockCodes: [params.stock_code],
-            date: today, country: "KR", periodType: "Monthly",
-            betaPeriods: ["1Y", "2Y", "3Y", "5Y"],
-          }),
-          fetchFinancials(corpCode, year, REPORT_CODE.annual, "CFS"),
-          fetchStockQuantity(corpCode, year, REPORT_CODE.annual),
-          fetchMarketData(params.stock_code),
-          getCompanyInfo(params.stock_code),
-        ]);
-
-        const output: Record<string, unknown> = { stockCode: params.stock_code, year };
-
-        // 기업정보
-        if (companyResult.status === "fulfilled") {
-          const info = companyResult.value;
-          output.company = { name: info.corp_name, nameEng: info.corp_name_eng, ceo: info.ceo_nm, industryCode: info.induty_code };
+        for (const code of codes) {
+          const hit = getCachedValuation(code, valuationDate);
+          if (hit) {
+            cached.push(hit as CompactResult);
+          } else {
+            uncachedCodes.push(code);
+          }
         }
 
-        // 베타 Weekly
-        if (betaWeeklyResult.status === "fulfilled" && betaWeeklyResult.value.length > 0) {
-          output.betaWeekly = betaWeeklyResult.value[0].betas;
-        } else {
-          output.betaWeekly = null;
+        // 캐시 미스가 있을 때만 라이브 API 호출
+        let liveResults: CompactResult[] = [];
+        if (uncachedCodes.length > 0) {
+          // 1. 베타: 미스 종목만 배치 (2회 호출 — Weekly + Monthly)
+          const [betaWeeklyResult, betaMonthlyResult] = await Promise.allSettled([
+            fetchBetaData({ stockCodes: uncachedCodes, date: valuationDate, country: "KR", periodType: "Weekly", betaPeriods: ["1Y", "2Y", "3Y", "5Y"] }),
+            fetchBetaData({ stockCodes: uncachedCodes, date: valuationDate, country: "KR", periodType: "Monthly", betaPeriods: ["1Y", "2Y", "3Y", "5Y"] }),
+          ]);
+
+          const weeklyMap = indexBetaByCode(betaWeeklyResult);
+          const monthlyMap = indexBetaByCode(betaMonthlyResult);
+
+          // 2. 미스 종목만 재무/주식수/시장/XBRL — 병렬
+          liveResults = await Promise.all(uncachedCodes.map((code) => processCompany(code, year, apiKey, weeklyMap, monthlyMap)));
         }
 
-        // 베타 Monthly
-        if (betaMonthlyResult.status === "fulfilled" && betaMonthlyResult.value.length > 0) {
-          output.betaMonthly = betaMonthlyResult.value[0].betas;
-        } else {
-          output.betaMonthly = null;
-        }
+        // 3. 캐시 + 라이브 결과 병합 (요청 순서 유지)
+        const resultMap = new Map<string, CompactResult>();
+        for (const r of cached) resultMap.set(r.code, r);
+        for (const r of liveResults) resultMap.set(r.code, r);
+        const results = codes.map((code) => resultMap.get(code)!);
 
-        // 주식수
-        let shares: SharesInfo | null = null;
-        if (stockQtyResult.status === "fulfilled") {
-          shares = extractSharesInfo(stockQtyResult.value, year, REPORT_CODE.annual);
-          output.shares = shares;
-        } else {
-          output.shares = null;
-        }
-
-        // 시장데이터: 종가만 + 시가총액 = 유통주식수 × 종가
-        let price: number | null = null;
-        if (marketResult.status === "fulfilled") {
-          price = marketResult.value.price ?? null;
-          output.price = price;
-        } else {
-          output.price = null;
-        }
-
-        // 시가총액 산출 (유통주식수 × 종가)
-        if (shares && price) {
-          output.marketCap = shares.outstanding * price;
-        } else {
-          output.marketCap = null;
-        }
-
-        // 이자부부채 + 비지배지분 + 세전이익
-        let debt: DebtSummary | null = null;
-        if (financialResult.status === "fulfilled") {
-          debt = extractDebtSummary(financialResult.value);
-          output.debt = debt;
-        } else {
-          output.debt = null;
-        }
-
-        // 출력 형식
-        if (params.response_format === "table") {
-          return { content: [{ type: "text" as const, text: formatValuationTable({
-            stockCode: params.stock_code,
-            company: output.company as { name: string } | undefined,
-            betaWeekly: output.betaWeekly as Record<string, { raw: number; adjusted: number; dataPoints: number }> | null,
-            betaMonthly: output.betaMonthly as Record<string, { raw: number; adjusted: number; dataPoints: number }> | null,
-            shares,
-            price,
-            marketCap: output.marketCap as number | null,
-            debt,
-          }) }] };
-        }
-
-        if (params.response_format === "json") {
-          return { content: [{ type: "text" as const, text: JSON.stringify(output, null, 2) }] };
-        }
-
-        return { content: [{ type: "text" as const, text: formatValuationMarkdown(output) }] };
+        // 4. 응답: 단일이면 객체, 다중이면 배열
+        const output = results.length === 1 ? results[0] : results;
+        return { content: [{ type: "text" as const, text: JSON.stringify(output) }] };
       } catch (error) {
         return { content: [{ type: "text" as const, text: handleApiError(error) }], isError: true };
       }
-    }
+    },
   );
 }
+
+// ─── 종목별 처리 ───
+
+async function processCompany(
+  code: string,
+  year: string,
+  apiKey: string | undefined,
+  weeklyMap: Map<string, StockBetaResult>,
+  monthlyMap: Map<string, StockBetaResult>,
+): Promise<CompactResult> {
+  const valuationDate = formatDate(new Date());
+
+  // 병렬: corpCode resolve → 재무/주식수/시장/기업정보
+  const corpCode = await resolveCorpCode(code);
+
+  const [financialResult, stockQtyResult, marketResult, companyResult] = await Promise.allSettled([
+    fetchFinancials(corpCode, year, REPORT_CODE.annual, "CFS", apiKey),
+    fetchStockQuantity(corpCode, year, REPORT_CODE.annual, apiKey),
+    fetchMarketData(code),
+    getCompanyInfo(code, apiKey),
+  ]);
+
+  // 기업명 + 업종
+  const name = companyResult.status === "fulfilled" ? companyResult.value.corp_name : null;
+  const industryCode = companyResult.status === "fulfilled" ? companyResult.value.induty_code : null;
+  const industry = industryCode
+    ? { code: industryCode, name: getIndustryName(industryCode) }
+    : null;
+
+  // 베타 → compact [raw, adjusted, dataPoints]
+  const beta: CompactBeta = {
+    weekly: compactBetas(weeklyMap.get(code)),
+    monthly: compactBetas(monthlyMap.get(code)),
+  };
+
+  // 주식수
+  const shares = stockQtyResult.status === "fulfilled"
+    ? extractSharesInfo(stockQtyResult.value, year, REPORT_CODE.annual)
+    : null;
+
+  // 종가 + 시가총액
+  const price = marketResult.status === "fulfilled" ? (marketResult.value.price ?? null) : null;
+  const mcapTotal = shares && price ? shares.outstanding * price : null;
+
+  // IBD (XBRL 우선 → Tier1/2 폴백) + NCI/세전이익
+  let ibd: CompactIBD | null = null;
+  let nci: number | null = null;
+  let pretaxIncome: number | null = null;
+
+  if (financialResult.status === "fulfilled") {
+    const items = financialResult.value;
+    const nciPretax = extractNciAndPretax(items);
+    nci = nciPretax.nonControllingInterest;
+    pretaxIncome = nciPretax.pretaxIncome;
+
+    const rceptNo = items[0]?.rcept_no;
+    let debt: DebtSummary | null = null;
+
+    if (rceptNo) {
+      const xbrlDebt = await extractDebtFromXbrl(rceptNo, year, apiKey);
+      if (xbrlDebt) {
+        debt = { ...xbrlDebt, nonControllingInterest: nci, pretaxIncome };
+      }
+    }
+
+    if (!debt) {
+      const fallback = extractDebtSummary(items);
+      if (fallback.interestBearingDebt > 0) debt = fallback;
+    }
+
+    if (debt) {
+      ibd = {
+        current: debt.current.items.map((i) => [i.account, i.amount]),
+        nonCurrent: debt.nonCurrent.items.map((i) => [i.account, i.amount]),
+        total: debt.interestBearingDebt,
+      };
+    }
+  }
+
+  return {
+    code,
+    name,
+    industry,
+    year,
+    valuationDate,
+    beta,
+    ibd,
+    nci,
+    pretaxIncome,
+    marketCap: { price, shares: shares?.outstanding ?? null, total: mcapTotal },
+  };
+}
+
+// ─── 유틸리티 ───
 
 function formatDate(date: Date): string {
   const y = date.getFullYear();
@@ -153,74 +236,23 @@ function formatDate(date: Date): string {
   return `${y}${m}${d}`;
 }
 
-function formatValuationMarkdown(data: Record<string, unknown>): string {
-  const lines: string[] = [];
-  const company = data.company as Record<string, string> | undefined;
-  const betaWeekly = data.betaWeekly as Record<string, { raw: number; adjusted: number; dataPoints: number }> | null;
-  const betaMonthly = data.betaMonthly as Record<string, { raw: number; adjusted: number; dataPoints: number }> | null;
-  const shares = data.shares as SharesInfo | null;
-  const price = data.price as number | null;
-  const marketCap = data.marketCap as number | null;
-  const debt = data.debt as DebtSummary | null;
-
-  lines.push(`# ${company?.name ?? data.stockCode} 밸류에이션 데이터`);
-  lines.push(`> 재무제표 기준: ${data.year}년 사업보고서 (연결)\n`);
-
-  // 종가 + 시가총액
-  lines.push("## 시장데이터");
-  lines.push(`- 종가: ${price?.toLocaleString() ?? "-"}원`);
-  if (marketCap) lines.push(`- **시가총액: ${marketCap.toLocaleString()}원** (유통주식수×종가)`);
-  lines.push("");
-
-  // 주식수
-  if (shares) {
-    lines.push("## 주식의 총수");
-    lines.push(`- 발행주식총수: ${shares.totalIssued.toLocaleString()}주`);
-    lines.push(`- 자기주식수: ${shares.treasuryStock.toLocaleString()}주`);
-    lines.push(`- **유통주식수: ${shares.outstanding.toLocaleString()}주**`);
-    lines.push("");
-  }
-
-  // 베타 Weekly
-  if (betaWeekly) {
-    lines.push("## 베타계수 (Weekly)");
-    lines.push("| 기간 | 실질베타 | 조정베타 | 포인트수 |");
-    lines.push("|------|---------|---------|---------|");
-    for (const [period, vals] of Object.entries(betaWeekly)) {
-      lines.push(`| ${period} | ${vals.raw ?? "-"} | ${vals.adjusted ?? "-"} | ${vals.dataPoints ?? "-"} |`);
+/** 베타 결과 배열을 stockCode → result 맵으로 인덱싱 */
+function indexBetaByCode(result: PromiseSettledResult<StockBetaResult[]>): Map<string, StockBetaResult> {
+  const map = new Map<string, StockBetaResult>();
+  if (result.status === "fulfilled") {
+    for (const r of result.value) {
+      map.set(r.stockCode, r);
     }
-    lines.push("");
   }
+  return map;
+}
 
-  // 베타 Monthly
-  if (betaMonthly) {
-    lines.push("## 베타계수 (Monthly)");
-    lines.push("| 기간 | 실질베타 | 조정베타 | 포인트수 |");
-    lines.push("|------|---------|---------|---------|");
-    for (const [period, vals] of Object.entries(betaMonthly)) {
-      lines.push(`| ${period} | ${vals.raw ?? "-"} | ${vals.adjusted ?? "-"} | ${vals.dataPoints ?? "-"} |`);
-    }
-    lines.push("");
+/** BetaValues → compact [raw, adjusted, dataPoints] 배열로 변환 */
+function compactBetas(result: StockBetaResult | undefined): Record<string, [number | null, number | null, number | null]> | null {
+  if (!result) return null;
+  const out: Record<string, [number | null, number | null, number | null]> = {};
+  for (const [period, vals] of Object.entries(result.betas)) {
+    out[period] = [vals.raw, vals.adjusted, vals.dataPoints];
   }
-
-  // 이자부부채
-  if (debt) {
-    lines.push("## 이자부부채");
-    if (debt.current.items.length > 0) {
-      lines.push("**유동:**");
-      for (const d of debt.current.items) lines.push(`- ${d.account}: ${d.amount.toLocaleString()}원`);
-      lines.push(`- 소계: ${debt.current.total.toLocaleString()}원`);
-    }
-    if (debt.nonCurrent.items.length > 0) {
-      lines.push("**비유동:**");
-      for (const d of debt.nonCurrent.items) lines.push(`- ${d.account}: ${d.amount.toLocaleString()}원`);
-      lines.push(`- 소계: ${debt.nonCurrent.total.toLocaleString()}원`);
-    }
-    lines.push(`\n**이자부부채 합계: ${debt.interestBearingDebt.toLocaleString()}원**`);
-    if (debt.nonControllingInterest !== null) lines.push(`**비지배지분: ${debt.nonControllingInterest.toLocaleString()}원**`);
-    if (debt.pretaxIncome !== null) lines.push(`**세전이익: ${debt.pretaxIncome.toLocaleString()}원**`);
-    lines.push("");
-  }
-
-  return lines.join("\n");
+  return out;
 }

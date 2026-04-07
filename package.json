@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.26.0",
+    "adm-zip": "^0.5.16",
     "axios": "^1.7.9",
     "fast-xml-parser": "^5.5.9",
     "fflate": "^0.8.2",
@@ -22,6 +23,7 @@
     "zod": "^3.23.8"
   },
   "devDependencies": {
+    "@types/adm-zip": "^0.5.8",
     "@types/node": "^22.10.0",
     "@types/react": "^19.0.0",
     "typescript": "^5.7.2"

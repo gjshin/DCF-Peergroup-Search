@@ -5,6 +5,7 @@ import { registerDartCompanyTool } from "@/services/tools/dart-company";
 import { registerDartFinancialsTool } from "@/services/tools/dart-financials";
 import { registerNaverMarketDataTool } from "@/services/tools/naver-market-data";
 import { registerValuationDataTool } from "@/services/tools/valuation-data";
+import { registerSearchByIndustryTool } from "@/services/tools/search-by-industry";
 
 const handler = createMcpHandler(
   (server) => {
@@ -21,6 +22,9 @@ const handler = createMcpHandler(
 
     // 통합 밸류에이션 (신규)
     registerValuationDataTool(server);
+
+    // 업종별 상장사 검색
+    registerSearchByIndustryTool(server);
   },
   {},
   {

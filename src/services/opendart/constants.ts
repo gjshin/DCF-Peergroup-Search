@@ -66,12 +66,17 @@ export const IBD_CURRENT_PATTERNS = [
   "단기차입금", "단기차입부채",
   "유동성장기부채", "유동성장기차입금",
   "유동성사채", "유동성전환사채", "유동성신주인수권부사채", "유동성교환사채",
-  "단기사채",
+  "단기사채", "당좌차월", "유동차입부채", "단기외화차입금",
 ];
 
 export const IBD_NON_CURRENT_PATTERNS = [
-  "장기차입금",
+  "장기차입금", "장기차입부채", "장기외화차입금",
   "사채", "전환사채", "신주인수권부사채", "교환사채",
+  "사모사채", "할인채",
+];
+
+export const IBD_COMMON_PATTERNS = [
+  "외화차입금", "차입부채", "주주차입금", "임원차입금", "관계기업차입금",
 ];
 
 export const LEASE_LIABILITY_KEYWORD = "리스부채";
@@ -94,6 +99,7 @@ export const ALL_IBD_ACCOUNT_IDS = new Set([
 export const ALL_IBD_PATTERNS = [
   ...IBD_CURRENT_PATTERNS,
   ...IBD_NON_CURRENT_PATTERNS,
+  ...IBD_COMMON_PATTERNS,
   LEASE_LIABILITY_KEYWORD,
 ];
 

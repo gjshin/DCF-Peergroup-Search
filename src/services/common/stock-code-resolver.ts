@@ -48,10 +48,10 @@ function initCache(): CorpCodeCache {
 
 const companyInfoCache = new Map<string, DartCompanyInfo>();
 
-function getApiKey(): string {
-  const key = process.env.OPENDART_API_KEY;
+function resolveApiKey(apiKey?: string): string {
+  const key = apiKey || process.env.OPENDART_API_KEY;
   if (!key) {
-    throw new Error("OPENDART_API_KEY 환경변수가 설정되지 않았습니다.");
+    throw new Error("OpenDART API 키가 필요합니다. api_key 파라미터를 전달하거나 OPENDART_API_KEY 환경변수를 설정해주세요.");
   }
   return key;
 }
@@ -74,7 +74,7 @@ export async function resolveCorpCode(stockCode: string): Promise<string> {
 /**
  * 종목코드에 대한 기업정보 조회 (캐시 우선, 없으면 DART API 호출)
  */
-export async function getCompanyInfo(stockCode: string): Promise<DartCompanyInfo> {
+export async function getCompanyInfo(stockCode: string, apiKey?: string): Promise<DartCompanyInfo> {
   const cached = companyInfoCache.get(stockCode);
   if (cached) return cached;
 
@@ -83,7 +83,7 @@ export async function getCompanyInfo(stockCode: string): Promise<DartCompanyInfo
   // DART company.json으로 상세 기업정보 조회
   try {
     const response = await axios.get<DartCompanyInfo>(`${DART_API_BASE}${DART_ENDPOINTS.COMPANY}`, {
-      params: { crtfc_key: getApiKey(), corp_code: corpCode },
+      params: { crtfc_key: resolveApiKey(apiKey), corp_code: corpCode },
       timeout: 15000,
     });
 

@@ -11,6 +11,8 @@ const DartCompanyInputSchema = z.object({
   response_format: z.enum(["markdown", "json"])
     .default("markdown")
     .describe("출력 형식"),
+  api_key: z.string().optional()
+    .describe("OpenDART API 키 (미입력 시 서버 환경변수 사용)"),
 }).strict();
 
 type DartCompanyInput = z.infer<typeof DartCompanyInputSchema>;
@@ -33,7 +35,7 @@ Examples:
     },
     async (params: DartCompanyInput) => {
       try {
-        const info = await getCompanyInfo(params.stock_code);
+        const info = await getCompanyInfo(params.stock_code, params.api_key);
 
         if (params.response_format === "json") {
           return { content: [{ type: "text" as const, text: JSON.stringify(info, null, 2) }] };
