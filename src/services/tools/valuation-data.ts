@@ -22,7 +22,7 @@ const ValuationDataInputSchema = z.object({
   stock_code: z.string().min(1).max(10).optional()
     .describe("단일 종목코드 6자리 (stock_codes 대신 사용 가능)"),
   valuation_date: z.string().regex(/^\d{8}$/).optional()
-    .describe("평가기준일 YYYYMMDD (기본: 오늘). 베타 조회일 및 사업연도 결정에 사용"),
+    .describe("평가기준일 YYYYMMDD (기본: 가장 최근 캐시된 날짜인 '20251231'). 베타 조회일 및 사업연도 결정에 사용"),
   year: z.string().regex(/^\d{4}$/).optional()
     .describe("재무제표 사업연도 YYYY (기본: 평가기준일 연도)"),
   api_key: z.string().optional()
@@ -90,7 +90,7 @@ KICPA(베타) + OpenDART(XBRL/재무/주식수) + 네이버금융(종가)을 병
       if (!rawCodes) {
         return { content: [{ type: "text" as const, text: "Error: stock_codes 또는 stock_code를 입력해야 합니다." }], isError: true };
       }
-      const valuationDate = params.valuation_date ?? formatDate(new Date());
+      const valuationDate = params.valuation_date ?? "20251231";
       const year = params.year ?? valuationDate.slice(0, 4);
       const codes = Array.isArray(rawCodes) ? rawCodes : [rawCodes];
       const apiKey = params.api_key;
