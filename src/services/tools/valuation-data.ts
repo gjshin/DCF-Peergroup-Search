@@ -18,14 +18,16 @@ const ValuationDataInputSchema = z.object({
   stock_codes: z.union([
     z.string().min(1).max(10),
     z.array(z.string().min(1).max(10)).min(1).max(10),
-  ]).describe("종목코드 6자리. 단일 문자열 또는 최대 10개 배열 (예: '005930' 또는 ['005930','005380'])"),
+  ]).optional().describe("종목코드 6자리. 단일 문자열 또는 최대 10개 배열 (예: '005930' 또는 ['005930','005380'])"),
+  stock_code: z.string().min(1).max(10).optional()
+    .describe("단일 종목코드 6자리 (stock_codes 대신 사용 가능)"),
   valuation_date: z.string().regex(/^\d{8}$/).optional()
     .describe("평가기준일 YYYYMMDD (기본: 오늘). 베타 조회일 및 사업연도 결정에 사용"),
   year: z.string().regex(/^\d{4}$/).optional()
     .describe("재무제표 사업연도 YYYY (기본: 평가기준일 연도)"),
   api_key: z.string().optional()
     .describe("OpenDART API 키 (미입력 시 서버 환경변수 사용)"),
-}).strict();
+});
 
 type ValuationDataInput = z.infer<typeof ValuationDataInputSchema>;
 
@@ -84,9 +86,13 @@ KICPA(베타) + OpenDART(XBRL/재무/주식수) + 네이버금융(종가)을 병
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     },
     async (params: ValuationDataInput) => {
+      const rawCodes = params.stock_codes ?? params.stock_code;
+      if (!rawCodes) {
+        return { content: [{ type: "text" as const, text: "Error: stock_codes 또는 stock_code를 입력해야 합니다." }], isError: true };
+      }
       const valuationDate = params.valuation_date ?? formatDate(new Date());
       const year = params.year ?? valuationDate.slice(0, 4);
-      const codes = Array.isArray(params.stock_codes) ? params.stock_codes : [params.stock_codes];
+      const codes = Array.isArray(rawCodes) ? rawCodes : [rawCodes];
       const apiKey = params.api_key;
 
       try {
