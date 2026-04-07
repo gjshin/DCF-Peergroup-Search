@@ -24,7 +24,7 @@ const ValuationDataInputSchema = z.object({
   valuation_date: z.string().regex(/^\d{8}$/).optional()
     .describe("평가기준일 YYYYMMDD (기본: 가장 최근 캐시된 날짜인 '20251231'). 베타 조회일 및 사업연도 결정에 사용"),
   year: z.string().regex(/^\d{4}$/).optional()
-    .describe("재무제표 사업연도 YYYY (기본: 평가기준일 연도)"),
+    .describe("재무제표 사업연도 YYYY. ⚠️주의: 반드시 평가기준일(valuation_date)과 동일한 연도를 입력해야 합니다! (예: 평가기준일이 20251231이면 무조건 2025 입력). 입력하지 않으면 평가기준일의 연도를 자동으로 산정합니다."),
   api_key: z.string().optional()
     .describe("OpenDART API 키 (미입력 시 서버 환경변수 사용)"),
 });
@@ -72,6 +72,10 @@ KICPA(베타) + OpenDART(XBRL/재무/주식수) + 네이버금융(종가)을 병
 1. 종목코드 또는 회사명
 2. 평가기준일 (YYYYMMDD)
 
+[⚠️ AI를 위한 엄격한 파라미터 규칙]
+- year 파라미터는 특별한 지시가 없는 한 무조건 valuation_date 의 연도와 일치시켜야 합니다. (관습적으로 작년 재무제표를 조회하려 하지 마세요!)
+- valuation_date 를 모를 경우 임의로 라이브 날짜를 입력하지 말고 생략하세요. (서버가 가장 최신 캐시로 알아서 연결합니다)
+
 [반환 데이터 — compact JSON]
 - beta: Weekly/Monthly × 1Y/2Y/3Y/5Y — 값은 [실질베타, 조정베타, 포인트수] 배열
 - ibd: 유동/비유동 세부계정 — 값은 [계정명, 금액] 튜플
@@ -80,7 +84,7 @@ KICPA(베타) + OpenDART(XBRL/재무/주식수) + 네이버금융(종가)을 병
 
 [파라미터]
 - stock_codes: 종목코드 6자리 (단일 문자열 또는 최대 10개 배열)
-- valuation_date: 평가기준일 YYYYMMDD (기본: 오늘)
+- valuation_date: 평가기준일 YYYYMMDD (기본: 가장 최근 캐시 일자)
 - year: 재무제표 사업연도 (기본: 평가기준일 연도)`,
       inputSchema: ValuationDataInputSchema,
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
