@@ -4,11 +4,35 @@ import { fetchBusinessContent } from "../opendart/document-parser";
 import { resolveCorpCode } from "../common/stock-code-resolver";
 import fs from "fs";
 import path from "path";
+import zlib from "zlib";
 
 const BusinessContentInputSchema = z.object({
   stock_code: z.string().describe("종목코드 6자리 (예: 005930)"),
   year: z.string().describe("대상 사업연도 (예: 2024)")
 });
+
+// 연도별 캐시 인메모리 보관 (cold start에서 1회 로딩, 이후 O(1) lookup)
+const cacheMemo = new Map<string, Record<string, string> | null>();
+
+function loadYearCache(year: string): Record<string, string> | null {
+  if (cacheMemo.has(year)) return cacheMemo.get(year)!;
+  const baseDir = path.resolve(process.cwd(), "data/business-cache");
+  const gzPath = path.join(baseDir, `${year}.json.gz`);
+  const jsonPath = path.join(baseDir, `${year}.json`);
+  let parsed: Record<string, string> | null = null;
+  try {
+    if (fs.existsSync(gzPath)) {
+      const buf = zlib.gunzipSync(fs.readFileSync(gzPath));
+      parsed = JSON.parse(buf.toString("utf8"));
+    } else if (fs.existsSync(jsonPath)) {
+      parsed = JSON.parse(fs.readFileSync(jsonPath, "utf8"));
+    }
+  } catch {
+    parsed = null;
+  }
+  cacheMemo.set(year, parsed);
+  return parsed;
+}
 
 export function registerBusinessContentTool(server: McpServer): void {
   server.registerTool(
@@ -23,21 +47,18 @@ export function registerBusinessContentTool(server: McpServer): void {
     },
     async (params: z.infer<typeof BusinessContentInputSchema>) => {
       try {
-        // 1. JSON 오프라인 캐시 우선 확인 (타임아웃 및 DART API 제한 회피)
-        const cachePath = path.resolve(process.cwd(), `data/business-cache/${params.year}.json`);
-        if (fs.existsSync(cachePath)) {
-          const cacheData = JSON.parse(fs.readFileSync(cachePath, "utf8"));
-          if (cacheData[params.stock_code]) {
-            return { content: [{ type: "text" as const, text: cacheData[params.stock_code] }] };
-          }
+        // 1. 오프라인 캐시 우선 (gzipped JSON, cold start에서 1회만 로드)
+        const cacheData = loadYearCache(params.year);
+        if (cacheData && cacheData[params.stock_code]) {
+          return { content: [{ type: "text" as const, text: cacheData[params.stock_code] }] };
         }
 
-        // 2. 캐시 스킵/없을 경우 실시간 다운로드 폴백 (Fallback)
+        // 2. 캐시 miss → 실시간 다운로드 폴백
         const corpCode = await resolveCorpCode(params.stock_code);
         if (!corpCode) {
-             return { content: [{ type: "text" as const, text: "해당 종목을 찾을 수 없거나 DART 고유번호 매핑에 실패했습니다." }] };
+          return { content: [{ type: "text" as const, text: "해당 종목을 찾을 수 없거나 DART 고유번호 매핑에 실패했습니다." }] };
         }
-        
+
         const markdown = await fetchBusinessContent(corpCode, params.year);
         return { content: [{ type: "text" as const, text: markdown }] };
       } catch (error: any) {

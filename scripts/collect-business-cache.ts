@@ -1,5 +1,6 @@
 import fs from "fs";
 import path from "path";
+import zlib from "zlib";
 import { fetchBusinessContent } from "../src/services/opendart/document-parser";
 
 // ─── 설정 ───
@@ -11,6 +12,7 @@ const SAVE_INTERVAL = 10;
 
 const BASE_DIR = path.resolve(__dirname, "../data/business-cache");
 const CACHE_PATH = path.join(BASE_DIR, `${TARGET_YEAR}.json`);
+const CACHE_GZ_PATH = path.join(BASE_DIR, `${TARGET_YEAR}.json.gz`);
 const PROGRESS_DIR = path.join(BASE_DIR, "_progress");
 const PROGRESS_PATH = path.join(PROGRESS_DIR, `${TARGET_YEAR}.json`);
 const INDUSTRY_PATH = path.resolve(__dirname, "../data/company-industry.json");
@@ -43,8 +45,26 @@ function loadJson<T>(filePath: string): T | null {
   }
 }
 
+function loadJsonMaybeGz<T>(gzPath: string, rawPath: string): T | null {
+  if (fs.existsSync(gzPath)) {
+    try {
+      return JSON.parse(zlib.gunzipSync(fs.readFileSync(gzPath)).toString("utf8"));
+    } catch {
+      return null;
+    }
+  }
+  return loadJson<T>(rawPath);
+}
+
 function saveJson(filePath: string, data: unknown) {
   fs.writeFileSync(filePath, JSON.stringify(data));
+}
+
+function saveCache(data: unknown) {
+  const json = JSON.stringify(data);
+  // raw .json은 gitignore 대상이지만 로컬 작업 편의를 위해 함께 저장
+  fs.writeFileSync(CACHE_PATH, json);
+  fs.writeFileSync(CACHE_GZ_PATH, zlib.gzipSync(json, { level: 9 }));
 }
 
 function sleep(ms: number) {
@@ -71,7 +91,7 @@ async function main() {
   ensureDir(PROGRESS_DIR);
 
   const stocks = getListedStocks();
-  const cache: Record<string, string> = loadJson(CACHE_PATH) ?? {};
+  const cache: Record<string, string> = loadJsonMaybeGz<Record<string, string>>(CACHE_GZ_PATH, CACHE_PATH) ?? {};
   const progress: Set<string> = new Set(loadJson<string[]>(PROGRESS_PATH) ?? []);
 
   // 실패/TOC 가짜성공 재시도 대상 포함
@@ -120,7 +140,7 @@ async function main() {
 
     const totalDone = fetched + failed;
     if (totalDone % SAVE_INTERVAL === 0 || i + BATCH_SIZE >= toFetch.length) {
-      saveJson(CACHE_PATH, cache);
+      saveCache(cache);
       saveJson(PROGRESS_PATH, [...progress]);
       console.log(`[진행] ${i + batch.length}/${toFetch.length} (성공=${fetched}, 실패/없음=${failed})`);
     }

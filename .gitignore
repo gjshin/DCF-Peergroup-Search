@@ -8,5 +8,6 @@ node_modules
 .vercel
 .env*.local
 
-# business cache (too large for GitHub, regenerate via scripts/collect-business-cache.ts)
-data/business-cache/
+# business cache: commit gzipped form only (raw .json is ~150MB, exceeds GitHub limit)
+data/business-cache/**/*.json
+!data/business-cache/**/*.json.gz
