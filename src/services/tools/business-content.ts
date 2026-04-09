@@ -41,7 +41,17 @@ export function registerBusinessContentTool(server: McpServer): void {
       title: "사업보고서 제품/서비스 원문 추출",
       description: `특정 기업의 사업보고서 원본에서 "II. 사업의 내용 / 주요 제품 및 서비스" 섹션의 텍스트와 표(Markdown)를 추출합니다.
 이 도구는 기업이 무엇을 통해 돈을 버는지, 어떤 제품의 매출 비중이 높은지 분석해야 할 때 사용합니다.
-(주의점: 텍스트 정보가 긴 편이므로 전체 재무 지표를 뽑는 valuation_get_data 툴과 혼합 사용은 지양하고 필요할 때만 단독 호출하세요.)`,
+
+[⚠️ AI를 위한 엄격한 year 파라미터 규칙]
+- year 는 "사업연도(결산 기준연도)"입니다. "보고서 제출연도"가 아닙니다.
+- valuation_date(평가기준일)가 주어졌다면, year 는 반드시 valuation_date 의 연도와 동일해야 합니다.
+  예: 평가기준일 20251231 → year="2025" (2025.12말 결산 사업보고서)
+  예: 평가기준일 20241231 → year="2024" (2024.12말 결산 사업보고서)
+- 관습적으로 "작년 사업보고서"를 조회하려 하지 마세요. 캐시는 최신 사업연도 기준으로 채워져 있습니다.
+- 평가기준일을 모르면 현재 연도(2025 또는 그 이상)를 우선 시도하세요.
+
+[주의점]
+- 텍스트 정보가 긴 편이므로 전체 재무 지표를 뽑는 valuation_get_data 툴과 혼합 사용은 지양하고 필요할 때만 단독 호출하세요.`,
       inputSchema: BusinessContentInputSchema,
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
