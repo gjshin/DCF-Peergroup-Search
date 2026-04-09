@@ -89,128 +89,142 @@ export async function extractDebtFromXbrl(
     const xml = xbrlEntry.getData().toString("utf8");
     const lines = xml.split("\n");
 
-    // 3. Context 파싱: 연결 + 당기 기말 + 대상 axis
-    const contextPrefix = `CFY${year}`;
-    const axis1 = "LiabilitiesArisingFromFinancingActivitiesAxis";
-    const axis2 = "ClassesOfFinancialLiabilitiesAxis";
+    // 3. 연결 우선 → 실패 시 별도(Separate)로 재시도
+    // 연결 재무제표가 없는 상장사(종속기업 無)는 XBRL에도 ConsolidatedMember context가 존재하지 않으므로
+    // 이런 회사들도 Axis 경로로 흡수하기 위해 SeparateMember로 폴백한다.
+    const consolidated = extractScope(lines, year, "ConsolidatedMember");
+    if (consolidated) return consolidated;
 
-    const axis1Contexts: Record<string, string> = {}; // contextId → member
-    const axis2Contexts: Record<string, string> = {};
+    const separate = extractScope(lines, year, "SeparateMember");
+    if (separate) return separate;
 
-    let buf = "";
-    let ctxId = "";
+    return null;
+  } catch {
+    return null;
+  }
+}
 
+/**
+ * 단일 엔티티 스코프(연결 or 별도)에 대해 IBD를 추출합니다.
+ * scopeMember: "ConsolidatedMember" (연결) 또는 "SeparateMember" (별도)
+ */
+function extractScope(lines: string[], year: string, scopeMember: string): XbrlDebtResult | null {
+  const contextPrefix = `CFY${year}`;
+  const axis1 = "LiabilitiesArisingFromFinancingActivitiesAxis";
+  const axis2 = "ClassesOfFinancialLiabilitiesAxis";
+
+  const axis1Contexts: Record<string, string> = {}; // contextId → member
+  const axis2Contexts: Record<string, string> = {};
+
+  let buf = "";
+  let ctxId = "";
+
+  for (const line of lines) {
+    const startMatch = line.match(/xbrli:context id="([^"]+)"/);
+    if (startMatch) {
+      ctxId = startMatch[1];
+      buf = "";
+    }
+    buf += line;
+
+    if (line.includes("</xbrli:context>") && ctxId) {
+      // 해당 스코프(연결 or 별도) + 당기 기말만
+      if (ctxId.startsWith(contextPrefix) && ctxId.includes("eFY") && ctxId.includes(scopeMember)) {
+        const memberEntries = [...buf.matchAll(
+          /dimension="(?:[^":]+:)?([^"]+)"[^>]*>\s*(?:[^:<\s]+:)?([^<\s]+)/g,
+        )];
+        for (const [, dim, member] of memberEntries) {
+          if (dim === axis1) axis1Contexts[ctxId] = member;
+          if (dim === axis2) axis2Contexts[ctxId] = member;
+        }
+      }
+      ctxId = "";
+      buf = "";
+    }
+  }
+
+  // 해당 스코프에 대한 context가 하나도 없으면 (예: 별도 only 회사에서 Consolidated 탐색 시) 즉시 종료
+  if (Object.keys(axis1Contexts).length === 0 && Object.keys(axis2Contexts).length === 0) {
+    return null;
+  }
+
+  // Axis 1: 멤버별 LiabilitiesArisingFromFinancingActivities 기말잔액 추출
+  const memberAmounts: Record<string, number> = {};
+
+  for (const [cId, member] of Object.entries(axis1Contexts)) {
     for (const line of lines) {
-      const startMatch = line.match(/xbrli:context id="([^"]+)"/);
-      if (startMatch) {
-        ctxId = startMatch[1];
-        buf = "";
-      }
-      buf += line;
-
-      if (line.includes("</xbrli:context>") && ctxId) {
-        // 연결 + 당기 기말만
-        if (ctxId.startsWith(contextPrefix) && ctxId.includes("eFY") && ctxId.includes("ConsolidatedMember")) {
-          // explicitMember 태그에서 dimension → member 쌍을 직접 파싱
-          const memberEntries = [...buf.matchAll(
-            /dimension="(?:[^":]+:)?([^"]+)"[^>]*>\s*(?:[^:<\s]+:)?([^<\s]+)/g,
-          )];
-          for (const [, dim, member] of memberEntries) {
-            if (dim === axis1) {
-              axis1Contexts[ctxId] = member;
-            }
-            if (dim === axis2) {
-              axis2Contexts[ctxId] = member;
-            }
+      if (
+        line.includes(`contextRef="${cId}"`) &&
+        line.includes(":LiabilitiesArisingFromFinancingActivities>")
+      ) {
+        const valMatch = line.match(/>(-?\d+)</);
+        if (valMatch) {
+          const amt = parseInt(valMatch[1]);
+          if (!memberAmounts[member] || Math.abs(amt) > Math.abs(memberAmounts[member])) {
+            memberAmounts[member] = amt;
           }
         }
-        ctxId = "";
-        buf = "";
       }
     }
+  }
 
-    // 4. Axis 1: 멤버별 LiabilitiesArisingFromFinancingActivities 기말잔액 추출
-    const memberAmounts: Record<string, number> = {};
+  // Axis 2: 리스부채 보완 (Axis 1에 없을 때만)
+  const hasLeaseInAxis1 = Object.keys(memberAmounts).some((m) =>
+    m.toLowerCase().includes("lease"),
+  );
 
-    for (const [cId, member] of Object.entries(axis1Contexts)) {
+  if (!hasLeaseInAxis1) {
+    for (const [cId, member] of Object.entries(axis2Contexts)) {
+      if (!member.toLowerCase().includes("lease")) continue;
+
       for (const line of lines) {
-        if (
-          line.includes(`contextRef="${cId}"`) &&
-          line.includes(":LiabilitiesArisingFromFinancingActivities>")
-        ) {
-          const valMatch = line.match(/>(-?\d+)</);
-          if (valMatch) {
-            const amt = parseInt(valMatch[1]);
-            // 가장 큰 값 사용 (같은 멤버가 여러 context에 있을 수 있음)
-            if (!memberAmounts[member] || Math.abs(amt) > Math.abs(memberAmounts[member])) {
-              memberAmounts[member] = amt;
-            }
-          }
-        }
-      }
-    }
-
-    // 5. Axis 2: 리스부채 보완 (Axis 1에 없을 때만)
-    const hasLeaseInAxis1 = Object.keys(memberAmounts).some((m) =>
-      m.toLowerCase().includes("lease"),
-    );
-
-    if (!hasLeaseInAxis1) {
-      for (const [cId, member] of Object.entries(axis2Contexts)) {
-        if (!member.toLowerCase().includes("lease")) continue;
-
-        for (const line of lines) {
-          if (line.includes(`contextRef="${cId}"`)) {
-            // FinancialLiabilities 잔액 태그
-            if (
-              line.includes(":FinancialLiabilities>") &&
-              !line.includes("AtFairValue") &&
-              !line.includes("AtAmortised")
-            ) {
-              const valMatch = line.match(/>(-?\d+)</);
-              if (valMatch) {
-                const amt = parseInt(valMatch[1]);
-                if (!memberAmounts[member] || Math.abs(amt) > Math.abs(memberAmounts[member])) {
-                  memberAmounts[member] = amt;
-                }
+        if (line.includes(`contextRef="${cId}"`)) {
+          if (
+            line.includes(":FinancialLiabilities>") &&
+            !line.includes("AtFairValue") &&
+            !line.includes("AtAmortised")
+          ) {
+            const valMatch = line.match(/>(-?\d+)</);
+            if (valMatch) {
+              const amt = parseInt(valMatch[1]);
+              if (!memberAmounts[member] || Math.abs(amt) > Math.abs(memberAmounts[member])) {
+                memberAmounts[member] = amt;
               }
             }
           }
         }
       }
     }
-
-    // 6. 비IBD 필터링 + 유동/비유동 분류
-    const currentItems: DebtItem[] = [];
-    const nonCurrentItems: DebtItem[] = [];
-    let currentTotal = 0;
-    let nonCurrentTotal = 0;
-
-    for (const [member, amount] of Object.entries(memberAmounts)) {
-      if (amount <= 0) continue;
-      if (!isIBDMember(member)) continue;
-
-      const label = memberToLabel(member);
-      const classification = classifyMember(member);
-
-      if (classification === "current") {
-        currentItems.push({ account: label, amount });
-        currentTotal += amount;
-      } else {
-        nonCurrentItems.push({ account: label, amount });
-        nonCurrentTotal += amount;
-      }
-    }
-
-    const total = currentTotal + nonCurrentTotal;
-    if (total === 0) return null;
-
-    return {
-      interestBearingDebt: total,
-      current: { total: currentTotal, items: currentItems },
-      nonCurrent: { total: nonCurrentTotal, items: nonCurrentItems },
-    };
-  } catch {
-    return null;
   }
+
+  // 비IBD 필터링 + 유동/비유동 분류
+  const currentItems: DebtItem[] = [];
+  const nonCurrentItems: DebtItem[] = [];
+  let currentTotal = 0;
+  let nonCurrentTotal = 0;
+
+  for (const [member, amount] of Object.entries(memberAmounts)) {
+    if (amount <= 0) continue;
+    if (!isIBDMember(member)) continue;
+
+    const label = memberToLabel(member);
+    const classification = classifyMember(member);
+
+    if (classification === "current") {
+      currentItems.push({ account: label, amount });
+      currentTotal += amount;
+    } else {
+      nonCurrentItems.push({ account: label, amount });
+      nonCurrentTotal += amount;
+    }
+  }
+
+  const total = currentTotal + nonCurrentTotal;
+  if (total === 0) return null;
+
+  return {
+    interestBearingDebt: total,
+    current: { total: currentTotal, items: currentItems },
+    nonCurrent: { total: nonCurrentTotal, items: nonCurrentItems },
+  };
 }
