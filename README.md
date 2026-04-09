@@ -14,6 +14,8 @@ Vercel에 배포하여 Claude for Excel, Claude Code 등 원격 MCP 클라이언
 | `naver_get_market_data` | 주가·시가총액·PER·PBR·업종분류·동종업종 조회 | 네이버 금융 |
 | `valuation_get_data` | 밸류에이션 통합 데이터 (베타+재무+주식수+종가) 한번에 조회 | KICPA + OpenDART + 네이버 |
 
+👉 **Peer Group 분석 워크플로우**는 [`docs/PEER_GROUP_WORKFLOW.md`](docs/PEER_GROUP_WORKFLOW.md) 참조 — 에이전트가 언제 어떤 도구를 어떤 순서로 호출해야 하는지 정리되어 있습니다.
+
 ## 기술 스택
 
 - **Next.js 15** + **mcp-handler** (Streamable HTTP transport)

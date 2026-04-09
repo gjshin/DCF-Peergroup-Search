@@ -24,7 +24,10 @@ Args:
   - response_format ('markdown' | 'json'): 출력 형식
 
 Examples:
-  - 삼성전자 시장데이터: stock_code="005930"`,
+  - 삼성전자 시장데이터: stock_code="005930"
+
+[Peer 워크플로우 주의]
+Peer Group 분기말 시가총액(price/shares/total)은 이미 valuation_get_data 에 포함되어 있으므로 따로 호출할 필요가 없습니다. 이 도구는 실시간 PER/PBR/EPS/BPS/배당수익률/외인소진율/컨센서스 목표가/동종업종 기업 리스트 같은 "당일" 지표 전용입니다. 상세는 docs/PEER_GROUP_WORKFLOW.md 참조.`,
       inputSchema: NaverMarketDataInputSchema,
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     },

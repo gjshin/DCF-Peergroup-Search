@@ -55,7 +55,10 @@ export function registerSearchByIndustryTool(server: McpServer): void {
 [반환 데이터 — compact JSON]
 - industries: 매칭된 업종 목록 (코드, 이름)
 - companies: 해당 업종 상장사 리스트 (종목코드, 회사명)
-- count: 총 상장사 수`,
+- count: 총 상장사 수
+
+[Peer 워크플로우 Step 2]
+이 도구로 업종 후보군을 확보한 뒤 → get_business_content 로 후보의 사업 내용을 한 종목씩 읽어 정성 필터링 → 최종 확정된 Peer 5~10개를 valuation_get_data 로 배치 조회하는 것이 정규 흐름입니다. 상세는 docs/PEER_GROUP_WORKFLOW.md 참조.`,
       inputSchema: SearchByIndustrySchema,
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },

@@ -47,7 +47,10 @@ Args:
   - report_type: annual/semi/q1/q3
   - fs_type: CFS(연결)/OFS(개별)
   - detail_level: valuation(기본, 경량)/full(전체)
-  - response_format: markdown/json/table(TSV)`,
+  - response_format: markdown/json/table(TSV)
+
+[Peer 워크플로우 주의]
+Peer Group 밸류에이션에 필요한 이자부부채/비지배지분/세전이익/주식수만 필요하다면, 분기말 일자에 한해 valuation_get_data 가 캐시 기반으로 훨씬 빠릅니다. 이 도구는 ① 전체 계정 필요(detail_level=full), ② 분기/반기 보고서(report_type=semi/q1/q3), ③ 개별(OFS) 재무제표, ④ 임의 사업연도(2024 이전 등) 같은 경우에 사용하세요. 상세는 docs/PEER_GROUP_WORKFLOW.md 참조.`,
       inputSchema: DartFinancialsInputSchema,
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     },

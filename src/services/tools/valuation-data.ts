@@ -85,7 +85,10 @@ KICPA(베타) + OpenDART(XBRL/재무/주식수) + 네이버금융(종가)을 병
 [파라미터]
 - stock_codes: 종목코드 6자리 (단일 문자열 또는 최대 10개 배열)
 - valuation_date: 평가기준일 YYYYMMDD (기본: 가장 최근 캐시 일자)
-- year: 재무제표 사업연도 (기본: 평가기준일 연도)`,
+- year: 재무제표 사업연도 (기본: 평가기준일 연도)
+
+[Peer 워크플로우 Step 4]
+Peer Group이 확정된 후 최대 10개 stock_codes 배열로 "한 번만" 호출하세요. valuation_date 를 분기말(YYYY0331/0630/0930/1231)로 지정하면 2,617 종목에 대해 100% 캐시 히트로 즉시 응답합니다. 이 도구 하나가 베타(Weekly/Monthly × 1Y/2Y/3Y/5Y) + 이자부부채(유동/비유동) + 비지배지분 + 세전이익 + 시가총액(price/shares/total) 을 모두 반환하므로, 같은 용도로 kicpa_get_beta / dart_get_financials / naver_get_market_data 를 따로 호출하지 마세요. 상세는 docs/PEER_GROUP_WORKFLOW.md 참조.`,
       inputSchema: ValuationDataInputSchema,
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     },

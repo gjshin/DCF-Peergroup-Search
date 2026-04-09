@@ -51,7 +51,10 @@ export function registerBusinessContentTool(server: McpServer): void {
 - 평가기준일을 모르면 현재 연도(2025 또는 그 이상)를 우선 시도하세요.
 
 [주의점]
-- 텍스트 정보가 긴 편이므로 전체 재무 지표를 뽑는 valuation_get_data 툴과 혼합 사용은 지양하고 필요할 때만 단독 호출하세요.`,
+- 텍스트 정보가 긴 편이므로 전체 재무 지표를 뽑는 valuation_get_data 툴과 혼합 사용은 지양하고 필요할 때만 단독 호출하세요.
+
+[Peer 워크플로우 Step 3]
+Peer Group 선정 시 이 도구는 "후보군의 주요 제품/서비스가 피평가 기업과 실제로 겹치는지" 정성 필터링 용도로 씁니다. 한 번에 한 종목씩 호출하세요 (본문이 20~40KB라 배치 호출 시 컨텍스트 폭발). 정성 필터링이 끝난 후에는 확정 Peer 리스트로 valuation_get_data 를 한 번만 배치 호출하세요. 상세는 docs/PEER_GROUP_WORKFLOW.md 참조.`,
       inputSchema: BusinessContentInputSchema,
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },

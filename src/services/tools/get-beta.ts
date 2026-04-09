@@ -53,7 +53,10 @@ Args:
 Examples:
   - 삼성전자 베타 조회: stock_codes=["005930"]
   - 삼성전자+SK하이닉스 5년 베타: stock_codes=["005930","000660"], beta_periods=["5Y"]
-  - 미국 AAPL 베타: stock_codes=["AAPL"], country="US"`,
+  - 미국 AAPL 베타: stock_codes=["AAPL"], country="US"
+
+[Peer 워크플로우 주의]
+국내 종목의 분기말(0331/0630/0930/1231) 베타를 Peer Group 밸류에이션 용도로 쓰는 것이라면 이 도구가 아니라 valuation_get_data 를 사용하세요 (캐시 100% 히트, 이자부부채/NCI/시총까지 한 번에). 이 도구는 ① 임의 영업일 베타, ② 미국 종목 베타, ③ Daily 주기 같은 특수 조회에만 사용합니다. 상세는 docs/PEER_GROUP_WORKFLOW.md 참조.`,
       inputSchema: GetBetaInputSchema,
       annotations: {
         readOnlyHint: true,
