@@ -1,6 +1,7 @@
 import axios from "axios";
 import AdmZip from "adm-zip";
 import fs from "fs";
+import { resolveCorpCode } from "../src/services/common/stock-code-resolver";
 
 function extractBusinessSegment(xmlContent: string): string {
   // Try to find typical headers
@@ -69,11 +70,12 @@ async function run() {
 
   if (!apiKey) throw new Error("No key");
 
-  // Samsung Electronics corp code
-  const corpCode = "00126380"; 
+  // "100030" test
+  const corpCodeUrl = await resolveCorpCode("100030");
+  if(!corpCodeUrl) return; 
   
   const listRes = await axios.get("https://opendart.fss.or.kr/api/list.json", {
-    params: { crtfc_key: apiKey, corp_code: corpCode, bgn_de: "20230101", end_de: "20231231", pblntf_detail_ty: "A001" }
+    params: { crtfc_key: apiKey, corp_code: corpCodeUrl, bgn_de: "20240101", end_de: "20250531", pblntf_detail_ty: "A001" }
   });
   
   const docs = listRes.data.list;
@@ -92,9 +94,10 @@ async function run() {
   if (!xmlEntry) return;
 
   const xmlContent = xmlEntry.getData().toString("utf8");
+  fs.writeFileSync("temp_100030.xml", xmlContent);
   const result = extractBusinessSegment(xmlContent);
   
-  fs.writeFileSync("temp_samsung_parsed.md", result.substring(0, 5000)); 
+  fs.writeFileSync("temp_100030_parsed.md", result.substring(0, 5000)); 
   console.log("Done parsing");
 }
 

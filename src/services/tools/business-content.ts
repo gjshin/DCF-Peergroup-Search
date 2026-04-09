@@ -2,6 +2,8 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { fetchBusinessContent } from "../opendart/document-parser";
 import { resolveCorpCode } from "../common/stock-code-resolver";
+import fs from "fs";
+import path from "path";
 
 const BusinessContentInputSchema = z.object({
   stock_code: z.string().describe("종목코드 6자리 (예: 005930)"),
@@ -21,6 +23,16 @@ export function registerBusinessContentTool(server: McpServer): void {
     },
     async (params: z.infer<typeof BusinessContentInputSchema>) => {
       try {
+        // 1. JSON 오프라인 캐시 우선 확인 (타임아웃 및 DART API 제한 회피)
+        const cachePath = path.resolve(process.cwd(), `data/business-cache/${params.year}.json`);
+        if (fs.existsSync(cachePath)) {
+          const cacheData = JSON.parse(fs.readFileSync(cachePath, "utf8"));
+          if (cacheData[params.stock_code]) {
+            return { content: [{ type: "text" as const, text: cacheData[params.stock_code] }] };
+          }
+        }
+
+        // 2. 캐시 스킵/없을 경우 실시간 다운로드 폴백 (Fallback)
         const corpCode = await resolveCorpCode(params.stock_code);
         if (!corpCode) {
              return { content: [{ type: "text" as const, text: "해당 종목을 찾을 수 없거나 DART 고유번호 매핑에 실패했습니다." }] };
