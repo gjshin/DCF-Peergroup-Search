@@ -4,7 +4,8 @@
 
 핵심 설계 원칙:
 - **캐시 우선, 라이브 폴백**: 분기말 기준 베타·이자부부채·시가총액과 사업보고서 본문은 서버에 사전 수집되어 있어 즉시 응답. 캐시 miss 시에만 upstream API를 호출합니다.
-- **Peer Group 워크플로우 친화적**: 업종 검색 → 사업 내용 정성 필터 → 통합 배치 조회가 한 번의 에이전트 세션에서 끝나도록 도구를 설계했습니다.
+- **결정론적 Peer 모집단**: (평가기준일, 업종코드) → 항상 동일한 모집단을 반환하는 `peergroup_get_population` 은 불변 분기말 스냅샷만 사용하고 라이브로 폴백하지 않습니다. 응답의 `populationHash` 로 감사 재현성을 보장합니다.
+- **Peer Group 워크플로우 친화적**: 모집단 확정(결정론) → 개요·부문별매출 정성 필터 → 통합 배치 조회가 한 번의 에이전트 세션에서 끝나도록 도구를 설계했습니다.
 
 ---
 
@@ -14,7 +15,8 @@
 
 | 도구 | 설명 | 캐시 파일 |
 |------|------|-----------|
-| `search_by_industry` | KSIC 업종코드/키워드로 해당 업종 전 상장사 리스트 즉시 반환 | `data/company-industry.json` |
+| `peergroup_get_population` | **결정론적 Peer 모집단** — (평가기준일, 업종코드) → 불변 분기말 스냅샷에서 동일 모집단 반환. 종목별 사업의 개요 + 부문별 매출(2-phase 페이지네이션) + 배제판단 플래그(스팩/지주사/리츠/12월외결산/관리종목) + `populationHash`. 라이브 폴백 없음 | `data/peer-snapshot/{YYYYMMDD}.json.gz` |
+| `search_by_industry` | KSIC 업종코드/키워드로 해당 업종 전 상장사 리스트 즉시 반환 (최신본, 시점 미고정 — 모집단 확정엔 위 도구 사용) | `data/company-industry.json` |
 | `get_business_content` | 사업보고서 "II. 사업의 내용 / 주요 제품 및 서비스" 원문 추출 (**2,611 / 2,617 종목, 99.8% 커버**) | `data/business-cache/{year}.json.gz` |
 | `valuation_get_data` | **가치평가 통합 패키지** — 베타(W/M × 1/2/3/5Y) + 이자부부채(유동/비유동) + 비지배지분 + 세전이익 + 시가총액을 한 번에. 분기말(3/31·6/30·9/30·12/31)은 100% 캐시 히트 | `data/valuation-cache/{YYYYMMDD}.json` |
 
@@ -57,6 +59,7 @@
 ├── app/api/[transport]/route.ts   # MCP 핸들러 (도구 등록)
 ├── src/services/
 │   ├── tools/                     # MCP 도구 정의
+│   │   ├── peergroup-population.ts # peergroup_get_population (결정론적 모집단)
 │   │   ├── compute-beta.ts        # compute_beta (네이버+KOSPI 직접계산)
 │   │   ├── search-stock.ts        # search_stock
 │   │   ├── search-by-industry.ts  # search_by_industry
@@ -65,23 +68,28 @@
 │   │   ├── naver-market-data.ts   # naver_get_market_data
 │   │   ├── business-content.ts    # get_business_content
 │   │   └── valuation-data.ts      # valuation_get_data
-│   ├── kicpa/                     # KICPA/KOSCOM 세션 & 베타 API
-│   ├── opendart/                  # OpenDART 클라이언트 + XBRL IBD 파서
+│   ├── beta-calc/                 # 네이버+KOSPI 회귀 베타 직접계산
+│   ├── opendart/                  # OpenDART 클라이언트 + XBRL IBD 파서 + 섹션 슬라이서
 │   ├── naver/                     # 네이버 금융 스크래퍼
-│   ├── cache/                     # valuation-cache 로더
+│   ├── kicpa/types.ts             # 베타 결과 공유 타입 (KICPA 조회 경로는 제거됨)
+│   ├── cache/                     # valuation-cache / peer-snapshot 로더
 │   ├── common/                    # 종목코드 ↔ corp_code 리졸버
 │   └── utils/                     # 에러 핸들러, 포맷터
 ├── data/
 │   ├── corp-codes.json            # DART 기업코드 매핑
-│   ├── company-industry.json      # 종목 ↔ KSIC 업종 매핑
+│   ├── company-industry.json      # 종목 ↔ KSIC 업종 + 시장구분/결산월/상장일
 │   ├── business-cache/            # 사업보고서 본문 (.json.gz, 커밋됨)
-│   └── valuation-cache/           # 분기말 밸류에이션 데이터
+│   ├── valuation-cache/           # 분기말 밸류에이션 데이터
+│   └── peer-snapshot/             # 분기말 Peer 모집단 스냅샷 (.json.gz, 불변)
 ├── docs/
 │   └── PEER_GROUP_WORKFLOW.md     # 에이전트용 워크플로우 가이드
 ├── scripts/
 │   ├── update-corp-codes.ts       # DART corp_code 동기화
+│   ├── update-industry-data.ts    # 업종/시장구분 매핑 수집
 │   ├── collect-business-cache.ts  # 사업보고서 본문 수집
-│   └── collect-valuation-cache.ts # 분기말 밸류에이션 캐시 수집
+│   ├── collect-valuation-cache.ts # 분기말 밸류에이션 캐시 수집
+│   ├── collect-peer-snapshot.ts   # 분기말 Peer 모집단 스냅샷 수집
+│   └── verify-beta-calc.ts        # 베타 수학 검증 (네트워크 불필요)
 └── next.config.ts                 # outputFileTracingIncludes 로 캐시 파일 번들링
 ```
 
@@ -113,6 +121,13 @@ npx tsx scripts/collect-business-cache.ts
 
 # 분기말 밸류에이션 스냅샷
 npx tsx scripts/collect-valuation-cache.ts
+
+# 분기말 Peer 모집단 스냅샷 (개요+부문별매출, 분기말 직후 실행 권장)
+npm run collect:peer-snapshot           # 4개 분기 전체
+npx tsx scripts/collect-peer-snapshot.ts --date 20251231   # 단일 분기
+
+# 업종/시장구분 매핑 (KRX KIND, API 키 불필요)
+npx tsx scripts/update-industry-data.ts
 
 # DART corp_code 매핑 동기화
 npx tsx scripts/update-corp-codes.ts

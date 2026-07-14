@@ -32,7 +32,7 @@ export function registerSearchStockTool(server: McpServer): void {
       title: "종목코드 검색",
       description: `종목명 또는 종목코드로 한국 주식 종목을 검색합니다. (네이버 금융 자동완성 API)
 
-다른 도구(kicpa_get_beta, dart_get_financials, naver_get_market_data 등)에서 사용할 종목코드를 찾을 때 유용합니다.
+다른 도구(valuation_get_data, dart_get_financials, naver_get_market_data 등)에서 사용할 종목코드를 찾을 때 유용합니다.
 
 Args:
   - query (string): 종목명 또는 종목코드 (예: '삼성전자', '삼성', '005930')
