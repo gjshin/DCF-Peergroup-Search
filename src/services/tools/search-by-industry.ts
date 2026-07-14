@@ -57,8 +57,9 @@ export function registerSearchByIndustryTool(server: McpServer): void {
 - companies: 해당 업종 상장사 리스트 (종목코드, 회사명)
 - count: 총 상장사 수
 
-[Peer 워크플로우 Step 2]
-이 도구로 업종 후보군을 확보한 뒤 → get_business_content 로 후보의 사업 내용을 한 종목씩 읽어 정성 필터링 → 최종 확정된 Peer 5~10개를 valuation_get_data 로 배치 조회하는 것이 정규 흐름입니다. 상세는 docs/PEER_GROUP_WORKFLOW.md 참조.`,
+[Peer 워크플로우에서의 역할 — 업종코드 해석기]
+이 도구는 최신 상장사 목록 기준의 빠른 조회용입니다 (시점 고정 없음 — 실행 시점에 따라 결과가 달라질 수 있음).
+평가기준일이 있는 Peer Group 선정 작업에서는 이 도구로 업종코드만 해석한 뒤, 모집단 확정은 반드시 peergroup_get_population (평가기준일 기준 결정론적 스냅샷) 을 사용하세요. 상세는 docs/PEER_GROUP_WORKFLOW.md 참조.`,
       inputSchema: SearchByIndustrySchema,
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
@@ -106,8 +107,8 @@ export function registerSearchByIndustryTool(server: McpServer): void {
           }
         }
 
-        // 이름순 정렬
-        companies.sort((a, b) => a.name.localeCompare(b.name, "ko"));
+        // 종목코드순 정렬 (localeCompare 는 ICU 빌드에 따라 결과가 달라질 수 있어 배제)
+        companies.sort((a, b) => (a.code < b.code ? -1 : a.code > b.code ? 1 : 0));
 
         const result = {
           industries,

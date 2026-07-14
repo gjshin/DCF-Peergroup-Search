@@ -4,7 +4,9 @@
  * 사용법: OPENDART_API_KEY=xxx npx tsx scripts/update-industry-data.ts
  *
  * 출력: data/company-industry.json
- * 구조: { [stockCode]: { name, corpCode, industryCode } }
+ * 구조: { [stockCode]: { name, corpCode, industryCode, market, accMonth, listedDate } }
+ * - market/accMonth/listedDate 는 KRX KIND corpList에서 수집 (API 키 불필요)
+ * - industryCode 는 DART company.json에서 수집 (신규 종목만, OPENDART_API_KEY 필요)
  */
 
 import fs from "fs";
@@ -40,30 +42,57 @@ interface CompanyIndustryEntry {
   name: string;
   corpCode: string;
   industryCode: string;
+  /** KOSPI | KOSDAQ (KRX KIND corpList 출처) */
+  market?: string;
+  /** 결산월 (예: "12") */
+  accMonth?: string;
+  /** 상장일 YYYY-MM-DD */
+  listedDate?: string;
 }
 
-async function fetchKrxListedCompanyCodes(): Promise<Set<string>> {
+interface KrxCompanyInfo {
+  market: "KOSPI" | "KOSDAQ";
+  accMonth: string;
+  listedDate: string;
+}
+
+/**
+ * KRX KIND corpList 다운로드.
+ * 컬럼: [회사명, 시장, 종목코드, 업종명, 주요제품, 상장일, 결산월, 대표자, 홈페이지, 지역]
+ */
+async function fetchKrxListedCompanies(): Promise<Map<string, KrxCompanyInfo>> {
+  const result = new Map<string, KrxCompanyInfo>();
   try {
-    const fetchMarket = async (marketType: string) => {
+    const fetchMarket = async (marketType: string, market: "KOSPI" | "KOSDAQ") => {
       const res = await axios.get(`http://kind.krx.co.kr/corpgeneral/corpList.do?method=download&searchType=13&marketType=${marketType}`, {
         responseType: "arraybuffer",
-        timeout: 10000,
+        timeout: 15000,
         headers: {
           "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0"
         }
       });
       const html = new TextDecoder("euc-kr").decode(res.data);
-      return [...html.matchAll(/>(\d{6})</g)].map(m => m[1]);
+      const rows = html.match(/<tr[^>]*>[\s\S]*?<\/tr>/g) ?? [];
+      for (const row of rows) {
+        const cells = [...row.matchAll(/<td[^>]*>([\s\S]*?)<\/td>/g)].map((m) =>
+          m[1].replace(/<[^>]+>/g, "").trim()
+        );
+        // 종목코드는 3번째 컬럼 (searchType=13 다운로드 포맷)
+        if (cells.length < 7 || !/^\d{6}$/.test(cells[2])) continue;
+        result.set(cells[2], {
+          market,
+          listedDate: cells[5],
+          accMonth: cells[6].replace(/월$/, ""),
+        });
+      }
     };
 
-    const kospi = await fetchMarket("stockMkt");
-    const kosdaq = await fetchMarket("kosdaqMkt");
-    
-    return new Set([...kospi, ...kosdaq]);
+    await fetchMarket("stockMkt", "KOSPI");
+    await fetchMarket("kosdaqMkt", "KOSDAQ");
   } catch (err) {
     console.error("Failed to fetch KRX listed companies.", err);
-    return new Set();
   }
+  return result;
 }
 
 async function fetchCompanyInfo(corpCode: string): Promise<{ induty_code: string; corp_name: string } | null> {
@@ -82,14 +111,10 @@ async function fetchCompanyInfo(corpCode: string): Promise<{ induty_code: string
 }
 
 async function main() {
-  if (!API_KEY) {
-    console.error("OPENDART_API_KEY 환경변수를 설정해주세요.");
-    process.exit(1);
-  }
-
-  // 0. KRX 상장사 목록 조회
+  // 0. KRX 상장사 목록 조회 (시장구분/결산월/상장일 포함, API 키 불필요)
   console.log("Fetching KRX listed companies...");
-  const krxListedCodes = await fetchKrxListedCompanyCodes();
+  const krxCompanies = await fetchKrxListedCompanies();
+  const krxListedCodes = new Set(krxCompanies.keys());
   console.log(`Found KRX active listed companies: ${krxListedCodes.size}`);
 
   // 1. corp-codes.json에서 상장사만 추출
@@ -126,6 +151,20 @@ async function main() {
     }
   }
 
+  // 2-1. 기존 엔트리에 KRX 정보(market/accMonth/listedDate) 보강
+  let enriched = 0;
+  for (const [stockCode, entry] of Object.entries(existing)) {
+    const krx = krxCompanies.get(stockCode);
+    if (!krx) continue;
+    if (entry.market !== krx.market || entry.accMonth !== krx.accMonth || entry.listedDate !== krx.listedDate) {
+      entry.market = krx.market;
+      entry.accMonth = krx.accMonth;
+      entry.listedDate = krx.listedDate;
+      enriched++;
+    }
+  }
+  if (enriched > 0) console.log(`Enriched ${enriched} entries with KRX market/accMonth/listedDate.`);
+
   // 3. 아직 캐시에 없는 회사만 수집
   const toFetch = listed.filter((c) => !existing[c.stock_code]);
   console.log(`To fetch: ${toFetch.length} companies`);
@@ -134,6 +173,13 @@ async function main() {
     console.log("All companies already cached. Saving updated cache and exiting.");
     fs.writeFileSync(OUTPUT_PATH, JSON.stringify(existing, null, 0));
     console.log(`Done! Total cached: ${Object.keys(existing).length} companies`);
+    return;
+  }
+
+  if (!API_KEY) {
+    console.warn("OPENDART_API_KEY 미설정 — 신규 종목 industryCode 수집은 건너뛰고 KRX 보강분만 저장합니다.");
+    fs.writeFileSync(OUTPUT_PATH, JSON.stringify(existing, null, 0));
+    console.log(`Done! Total cached: ${Object.keys(existing).length} companies (신규 ${toFetch.length}종목 미수집)`);
     return;
   }
 
@@ -154,10 +200,12 @@ async function main() {
 
     for (const r of results) {
       if (r.info) {
+        const krx = krxCompanies.get(r.stockCode);
         existing[r.stockCode] = {
           name: r.info.corp_name,
           corpCode: r.corpCode,
           industryCode: r.info.induty_code,
+          ...(krx ? { market: krx.market, accMonth: krx.accMonth, listedDate: krx.listedDate } : {}),
         };
         fetched++;
       } else {

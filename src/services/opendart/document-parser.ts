@@ -106,49 +106,26 @@ async function withRetry<T>(fn: () => Promise<T>, attempts = 3): Promise<T> {
   throw lastErr;
 }
 
+export interface DartListDoc {
+  rcept_no: string;
+  report_nm: string;
+  rcept_dt: string;
+}
+
+const isAmend = (nm: string) => /\[.*정정.*\]/.test(nm);
+
 /**
- * 특정 기업/연도의 사업보고서 원문에서 "사업의 내용" 섹션을 추출.
+ * 후보 공시 목록을 순서대로 시도하여 "사업의 내용" 섹션을 추출.
+ * 성공 시 마크다운과 채택된 공시를 함께 반환, 전부 실패 시 에러 메시지 반환.
  */
-export async function fetchBusinessContent(corpCode: string, year: string, apiKey?: string): Promise<string> {
-  const key = apiKey || process.env.OPENDART_API_KEY;
-  if (!key) throw new Error("API 키가 없습니다.");
-
-  const bgnDe = `${year}0101`;
-  const endDe = `${parseInt(year) + 1}0531`;
-
-  const listRes = await withRetry(() =>
-    axios.get(`${DART_API_BASE}/list.json`, {
-      params: {
-        crtfc_key: key,
-        corp_code: corpCode,
-        bgn_de: bgnDe,
-        end_de: endDe,
-        pblntf_detail_ty: "A001",
-      },
-      timeout: 15000,
-    })
-  );
-
-  const docs: Array<{ rcept_no: string; report_nm: string; rcept_dt: string }> = listRes.data.list;
-  if (!docs || docs.length === 0) {
-    return `❌ ${year}년도 사업보고서를 찾을 수 없습니다. (아직 공시되지 않았거나 공시 대상이 아님)`;
-  }
-
-  // 후보 우선순위:
-  // 1. 정정공시([기재정정]/[첨부정정]) 아닌 원본 사업보고서
-  // 2. 정정공시라도 본문이 살아있는 경우 (원본이 삭제된 경우 대비)
-  // 정렬: 원본 우선, 그 안에서 rcept_dt 내림차순(최신)
-  const isAmend = (nm: string) => /\[.*정정.*\]/.test(nm);
-  const sorted = [...docs].sort((a, b) => {
-    const aAmend = isAmend(a.report_nm) ? 1 : 0;
-    const bAmend = isAmend(b.report_nm) ? 1 : 0;
-    if (aAmend !== bAmend) return aAmend - bAmend;
-    return b.rcept_dt.localeCompare(a.rcept_dt);
-  });
-
+async function downloadBestContent(
+  sorted: DartListDoc[],
+  key: string
+): Promise<{ markdown: string; doc: DartListDoc } | { error: string }> {
   // 후보를 순서대로 시도. document.xml이 <1KB거나 XML 본문 파싱 실패하면 다음 후보로.
   let zip: AdmZip | null = null;
   let xmlEntries: AdmZip.IZipEntry[] = [];
+  let pickedDoc: DartListDoc | null = null;
   let lastErr = "";
 
   for (const doc of sorted) {
@@ -172,6 +149,7 @@ export async function fetchBusinessContent(corpCode: string, year: string, apiKe
       }
       zip = z;
       xmlEntries = entries;
+      pickedDoc = doc;
       break;
     } catch (e: any) {
       lastErr = e.message;
@@ -179,8 +157,8 @@ export async function fetchBusinessContent(corpCode: string, year: string, apiKe
     }
   }
 
-  if (!zip || xmlEntries.length === 0) {
-    return `❌ 원본 XML 다운로드 실패 (DART 응답 에러: ${lastErr})`;
+  if (!zip || xmlEntries.length === 0 || !pickedDoc) {
+    return { error: `❌ 원본 XML 다운로드 실패 (DART 응답 에러: ${lastErr})` };
   }
 
   // 각 XML 파트에서 추출 시도. "1. 사업의 개요"가 앞쪽에 오는 본문을 우선 채택,
@@ -204,7 +182,167 @@ export async function fetchBusinessContent(corpCode: string, year: string, apiKe
   const best = bestBody ?? bestAny;
 
   if (!best) {
-    return "❌ 사업의 내용 섹션을 찾을 수 없거나 추출에 실패했습니다. (검색어 포맷 미스매치)";
+    return { error: "❌ 사업의 내용 섹션을 찾을 수 없거나 추출에 실패했습니다. (검색어 포맷 미스매치)" };
   }
-  return best;
+  return { markdown: best, doc: pickedDoc };
+}
+
+/**
+ * 특정 기업/연도의 사업보고서 원문에서 "사업의 내용" 섹션을 추출.
+ */
+export async function fetchBusinessContent(corpCode: string, year: string, apiKey?: string): Promise<string> {
+  const key = apiKey || process.env.OPENDART_API_KEY;
+  if (!key) throw new Error("API 키가 없습니다.");
+
+  const bgnDe = `${year}0101`;
+  const endDe = `${parseInt(year) + 1}0531`;
+
+  const listRes = await withRetry(() =>
+    axios.get(`${DART_API_BASE}/list.json`, {
+      params: {
+        crtfc_key: key,
+        corp_code: corpCode,
+        bgn_de: bgnDe,
+        end_de: endDe,
+        pblntf_detail_ty: "A001",
+      },
+      timeout: 15000,
+    })
+  );
+
+  const docs: DartListDoc[] = listRes.data.list;
+  if (!docs || docs.length === 0) {
+    return `❌ ${year}년도 사업보고서를 찾을 수 없습니다. (아직 공시되지 않았거나 공시 대상이 아님)`;
+  }
+
+  // 후보 우선순위:
+  // 1. 정정공시([기재정정]/[첨부정정]) 아닌 원본 사업보고서
+  // 2. 정정공시라도 본문이 살아있는 경우 (원본이 삭제된 경우 대비)
+  // 정렬: 원본 우선, 그 안에서 rcept_dt 내림차순(최신)
+  const sorted = [...docs].sort((a, b) => {
+    const aAmend = isAmend(a.report_nm) ? 1 : 0;
+    const bAmend = isAmend(b.report_nm) ? 1 : 0;
+    if (aAmend !== bAmend) return aAmend - bAmend;
+    return b.rcept_dt.localeCompare(a.rcept_dt);
+  });
+
+  const result = await downloadBestContent(sorted, key);
+  return "error" in result ? result.error : result.markdown;
+}
+
+// ─────────────────────────────────────────────────────────────
+// 평가기준일 시점 최신 정기보고서 조회
+// ─────────────────────────────────────────────────────────────
+
+export interface PeriodicReportMeta {
+  rceptNo: string;
+  /** A001=사업보고서, A002=반기보고서, A003=분기보고서 */
+  type: "A001" | "A002" | "A003" | "unknown";
+  name: string;
+  rceptDt: string;
+}
+
+function classifyReport(reportNm: string): PeriodicReportMeta["type"] {
+  if (reportNm.includes("사업보고서")) return "A001";
+  if (reportNm.includes("반기보고서")) return "A002";
+  if (reportNm.includes("분기보고서")) return "A003";
+  return "unknown";
+}
+
+/** report_nm의 "(YYYY.MM)" 보고기간을 정렬키로 파싱 (없으면 rcept_dt 폴백) */
+function reportPeriodKey(doc: DartListDoc): string {
+  const m = doc.report_nm.match(/\((\d{4})\.(\d{2})\)/);
+  return m ? `${m[1]}${m[2]}` : doc.rcept_dt.slice(0, 6);
+}
+
+/** YYYYMMDD에서 n개월 전 날짜 (일자는 01로 고정) */
+function monthsBefore(yyyymmdd: string, months: number): string {
+  const y = parseInt(yyyymmdd.slice(0, 4), 10);
+  const m = parseInt(yyyymmdd.slice(4, 6), 10);
+  const total = y * 12 + (m - 1) - months;
+  const ny = Math.floor(total / 12);
+  const nm = (total % 12) + 1;
+  return `${ny}${String(nm).padStart(2, "0")}01`;
+}
+
+/**
+ * 기준일(asOfDate) 시점에 "이용 가능했던 최신 정기보고서"에서 사업의 내용 섹션을 추출.
+ *
+ * 선택 규칙 (결정론):
+ * 1. rcept_dt <= asOfDate 인 정기공시(A: 사업/반기/분기보고서)만 후보
+ * 2. 보고기간(report_nm의 "(YYYY.MM)") 내림차순 — 최신 결산기간 우선
+ * 3. 동일 기간이면 비정정 원본 우선, 그 다음 rcept_dt 내림차순
+ *
+ * 실패 시 null (호출자가 캐시 플래그 처리).
+ */
+export async function fetchBusinessContentAsOf(
+  corpCode: string,
+  asOfDate: string,
+  apiKey?: string
+): Promise<{ markdown: string; report: PeriodicReportMeta } | null> {
+  const key = apiKey || process.env.OPENDART_API_KEY;
+  if (!key) throw new Error("API 키가 없습니다.");
+
+  const listRes = await withRetry(() =>
+    axios.get(`${DART_API_BASE}/list.json`, {
+      params: {
+        crtfc_key: key,
+        corp_code: corpCode,
+        bgn_de: monthsBefore(asOfDate, 15),
+        end_de: asOfDate,
+        pblntf_ty: "A",
+        page_count: 100,
+      },
+      timeout: 15000,
+    })
+  );
+
+  const docs: DartListDoc[] = listRes.data.list ?? [];
+  const candidates = selectPeriodicReportCandidates(docs, asOfDate);
+  if (candidates.length === 0) return null;
+
+  return fetchBusinessContentForDocs(candidates, key);
+}
+
+/**
+ * 이미 확보한 공시 목록(후보 순서 유지)에서 사업의 내용을 추출.
+ * list.json 재호출 없이 document.xml만 다운로드 — 빌더가 rcept_no 단위로 사용.
+ */
+export async function fetchBusinessContentForDocs(
+  docs: DartListDoc[],
+  apiKey?: string
+): Promise<{ markdown: string; report: PeriodicReportMeta } | null> {
+  const key = apiKey || process.env.OPENDART_API_KEY;
+  if (!key) throw new Error("API 키가 없습니다.");
+  if (docs.length === 0) return null;
+
+  const result = await downloadBestContent(docs, key);
+  if ("error" in result) return null;
+
+  return {
+    markdown: result.markdown,
+    report: {
+      rceptNo: result.doc.rcept_no,
+      type: classifyReport(result.doc.report_nm),
+      name: result.doc.report_nm,
+      rceptDt: result.doc.rcept_dt,
+    },
+  };
+}
+
+/**
+ * 정기보고서 후보 필터+정렬 (fetchBusinessContentAsOf의 선택 규칙과 동일).
+ * 빌더가 다운로드 없이 "선택될 보고서"를 미리 결정할 때도 사용.
+ */
+export function selectPeriodicReportCandidates(docs: DartListDoc[], asOfDate: string): DartListDoc[] {
+  return docs
+    .filter((d) => d.rcept_dt <= asOfDate && classifyReport(d.report_nm) !== "unknown")
+    .sort((a, b) => {
+      const period = reportPeriodKey(b).localeCompare(reportPeriodKey(a));
+      if (period !== 0) return period;
+      const aAmend = isAmend(a.report_nm) ? 1 : 0;
+      const bAmend = isAmend(b.report_nm) ? 1 : 0;
+      if (aAmend !== bAmend) return aAmend - bAmend;
+      return b.rcept_dt.localeCompare(a.rcept_dt);
+    });
 }

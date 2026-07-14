@@ -11,3 +11,9 @@ node_modules
 # business cache: commit gzipped form only (raw .json is ~150MB, exceeds GitHub limit)
 data/business-cache/**/*.json
 !data/business-cache/**/*.json.gz
+
+# peer snapshot: commit gzipped form only; builder intermediates are local-only
+data/peer-snapshot/*.json
+!data/peer-snapshot/*.json.gz
+data/peer-snapshot/_progress/
+data/peer-snapshot/_shared/

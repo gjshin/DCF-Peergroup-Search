@@ -7,6 +7,7 @@ import { registerValuationDataTool } from "@/services/tools/valuation-data";
 import { registerSearchByIndustryTool } from "@/services/tools/search-by-industry";
 import { registerBusinessContentTool } from "@/services/tools/business-content";
 import { registerComputeBetaTool } from "@/services/tools/compute-beta";
+import { registerPeergroupPopulationTool } from "@/services/tools/peergroup-population";
 
 const handler = createMcpHandler(
   (server) => {
@@ -30,6 +31,9 @@ const handler = createMcpHandler(
 
     // 베타 직접 계산 (네이버 기반, KICPA 비의존)
     registerComputeBetaTool(server);
+
+    // Peer 모집단 결정론적 조회 (분기말 스냅샷)
+    registerPeergroupPopulationTool(server);
   },
   {},
   {
