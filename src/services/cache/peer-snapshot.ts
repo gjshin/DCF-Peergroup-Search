@@ -16,6 +16,10 @@ export interface PeerSnapshotCompany {
   report: { rceptNo: string; type: string; name: string; rceptDt: string } | null;
   overview: string | null;
   segments: string | null;
+  /** scripts/summarize-peer-snapshot.ts 후처리 — LLM 3~4문장 개요 요약 (1회 생성 후 고정) */
+  overviewSummary?: string | null;
+  /** scripts/summarize-peer-snapshot.ts 후처리 — 매출실적 표 구간만 결정론적 절단 */
+  segmentsBrief?: string | null;
   flags: {
     segmentsSource: "sales" | "products" | "business" | null;
     overviewMissing: boolean;
@@ -35,6 +39,12 @@ export interface PeerSnapshot {
     companyCount: number;
     rosterSource: string;
     notes: string;
+    summary?: {
+      method: string;
+      summarizedAt: string;
+      overviewSummaryCount: number;
+      segmentsBriefCount: number;
+    };
   };
   companies: Record<string, PeerSnapshotCompany>;
 }

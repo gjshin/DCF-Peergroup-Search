@@ -26,6 +26,12 @@ const PeergroupPopulationSchema = z
       .boolean()
       .default(false)
       .describe("false: 모집단 로스터만(경량, 기본). true: 사업의 개요+부문별 매출 포함(page 단위)"),
+    content_mode: z
+      .enum(["summary", "full"])
+      .default("summary")
+      .describe(
+        "include_content=true일 때 본문 형태. summary(기본): 스냅샷에 고정 저장된 개요 요약(3~4문장)+매출실적 표 발췌 — 경량·유사성 판단용. full: 섹션 원문(max_section_chars 절단)"
+      ),
     page: z.number().int().min(1).default(1).describe("include_content=true일 때 페이지 번호"),
     page_size: z
       .number()
@@ -88,7 +94,7 @@ export function registerPeergroupPopulationTool(server: McpServer): void {
 
 [2-phase 사용법 — Peer 워크플로우 Step 2]
 - Step 2a (include_content=false, 기본): 모집단 로스터 전체 + 배제판단 플래그(스팩/지주사/리츠/12월외결산/관리종목). 여기서 1차 배제를 판단하고 populationHash 를 기록하세요.
-- Step 2b (include_content=true): page 단위로 각 종목의 "사업의 개요" + "부문별 매출"(매출 및 수주상황 표)을 받아 피평가 기업과의 사업 유사성을 정성 판단하세요. 페이지당 5종목 기본 — page 를 올려가며 모집단 전체를 순회합니다.
+- Step 2b (include_content=true): page 단위로 각 종목의 사업내용을 받아 피평가 기업과의 사업 유사성을 정성 판단하세요. 기본 content_mode="summary"는 스냅샷에 고정 저장된 개요 요약(3~4문장)+매출실적 표 발췌를 반환합니다(경량·재현 가능). 원문이 필요하면 content_mode="full". 페이지당 5종목 기본 — page 를 올려가며 모집단 전체를 순회합니다.
 - 최종 확정 Peer 는 valuation_get_data 로 배치 조회. 원문 전체가 필요한 최종 후보 2~3개만 get_business_content 사용.
 
 [관련 도구]
@@ -178,17 +184,31 @@ export function registerPeergroupPopulationTool(server: McpServer): void {
             totalPages,
             nextPage: params.page < totalPages ? params.page + 1 : null,
           },
-          companies: pageItems.map(([code, c]) => ({
-            ...rosterEntry(code, c),
-            report: c.report,
-            overview: truncate(c.overview, params.max_section_chars),
-            segments: truncate(c.segments, params.max_section_chars),
-            segmentsSource: c.flags.segmentsSource,
-            contentNote:
-              c.overview === null
-                ? "개요 추출 실패 종목 — 원문 확인이 필요하면 get_business_content 를 사용하세요"
-                : undefined,
-          })),
+          companies: pageItems.map(([code, c]) => {
+            // summary 모드: 스냅샷에 1회 생성 후 고정 저장된 요약 필드 사용 (없으면 원문 폴백)
+            const useSummary = params.content_mode === "summary";
+            const overview = useSummary
+              ? c.overviewSummary ?? truncate(c.overview, params.max_section_chars)
+              : truncate(c.overview, params.max_section_chars);
+            const segments = useSummary
+              ? c.segmentsBrief ?? truncate(c.segments, params.max_section_chars)
+              : truncate(c.segments, params.max_section_chars);
+            const notes: string[] = [];
+            if (c.overview === null) {
+              notes.push("개요 추출 실패 종목 — 원문 확인이 필요하면 get_business_content 를 사용하세요");
+            } else if (useSummary && c.overviewSummary == null) {
+              notes.push("요약 미생성 스냅샷 — 개요는 원문 절단본");
+            }
+            return {
+              ...rosterEntry(code, c),
+              report: c.report,
+              contentMode: params.content_mode,
+              overview,
+              segments,
+              segmentsSource: c.flags.segmentsSource,
+              contentNote: notes.length ? notes.join(" / ") : undefined,
+            };
+          }),
         };
         return { content: [{ type: "text" as const, text: JSON.stringify(result) }] };
       } catch (error) {
