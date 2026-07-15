@@ -30,7 +30,7 @@ const PeergroupPopulationSchema = z
       .enum(["summary", "full"])
       .default("summary")
       .describe(
-        "include_content=true일 때 본문 형태. summary(기본): 스냅샷에 고정 저장된 개요 요약(3~4문장)+매출실적 표 발췌 — 경량·유사성 판단용. full: 섹션 원문(max_section_chars 절단)"
+        "include_content=true일 때 본문 형태. summary(기본): 스냅샷에 고정 저장된 개요 요약(3~4문장)+부문별 매출 요약(최근 기수 금액·비중 한 줄) — 경량·유사성 판단용. full: 섹션 원문(max_section_chars 절단)"
       ),
     page: z.number().int().min(1).default(1).describe("include_content=true일 때 페이지 번호"),
     page_size: z
@@ -191,7 +191,7 @@ export function registerPeergroupPopulationTool(server: McpServer): void {
               ? c.overviewSummary ?? truncate(c.overview, params.max_section_chars)
               : truncate(c.overview, params.max_section_chars);
             const segments = useSummary
-              ? c.segmentsBrief ?? truncate(c.segments, params.max_section_chars)
+              ? c.segmentsSummary ?? c.segmentsBrief ?? truncate(c.segments, params.max_section_chars)
               : truncate(c.segments, params.max_section_chars);
             const notes: string[] = [];
             if (c.overview === null) {

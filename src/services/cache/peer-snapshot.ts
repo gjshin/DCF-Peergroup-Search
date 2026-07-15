@@ -18,7 +18,9 @@ export interface PeerSnapshotCompany {
   segments: string | null;
   /** scripts/summarize-peer-snapshot.ts 후처리 — LLM 3~4문장 개요 요약 (1회 생성 후 고정) */
   overviewSummary?: string | null;
-  /** scripts/summarize-peer-snapshot.ts 후처리 — 매출실적 표 구간만 결정론적 절단 */
+  /** scripts/summarize-peer-snapshot.ts 후처리 — 부문별 매출 금액·비중 한 줄 LLM 요약 (1회 생성 후 고정) */
+  segmentsSummary?: string | null;
+  /** scripts/summarize-peer-snapshot.ts 후처리 — 매출실적 표 구간만 결정론적 절단 (요약 폴백) */
   segmentsBrief?: string | null;
   flags: {
     segmentsSource: "sales" | "products" | "business" | null;
@@ -43,6 +45,7 @@ export interface PeerSnapshot {
       method: string;
       summarizedAt: string;
       overviewSummaryCount: number;
+      segmentsSummaryCount?: number;
       segmentsBriefCount: number;
     };
   };

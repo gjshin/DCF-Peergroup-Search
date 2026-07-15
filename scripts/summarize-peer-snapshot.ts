@@ -1,12 +1,13 @@
 /**
- * 피어 스냅샷 요약 필드 생성 — 원문 보존, 요약 필드 추가 (혼합 방식)
+ * 피어 스냅샷 요약 필드 생성 — 원문 보존, 요약 필드 추가
  *
- * - overviewSummary: "사업의 개요"를 claude CLI(-p 헤드리스)로 3~4문장 요약 (10종목 배치, 3병렬)
+ * - overviewSummary: "사업의 개요"를 claude CLI(-p 헤드리스)로 3~4문장 요약
+ * - segmentsSummary: 매출실적 표 발췌(segmentsBrief)를 부문별 금액·비중 한 줄로 LLM 요약
  * - segmentsBrief:   "매출 및 수주상황"에서 매출실적 표 구간만 결정론적으로 절단
- *                    (판매경로/판매방법/판매전략/수주상황 등 서술부 제거)
+ *                    (판매경로/판매방법/판매전략/수주상황 등 서술부 제거 — 요약 실패 시 폴백)
  *
- * 재개 가능: 진행 파일(data/peer-snapshot/overview-summaries-{date}.json)에 배치마다 저장.
- * 전 종목 완료 시 스냅샷 .json.gz 에 병합 기록(원문 필드는 그대로 유지).
+ * 재개 가능: 진행 파일(data/peer-snapshot/{overview|segments}-summaries-{date}.json)에
+ * 배치마다 저장. 전 종목 완료 시 스냅샷 .json.gz 에 병합 기록(원문 필드는 그대로 유지).
  *
  * 사용:
  *   npx tsx scripts/summarize-peer-snapshot.ts 20251231            # 요약 생성 + 완료 시 병합
@@ -54,7 +55,30 @@ export function compactSegments(segments: string | null, maxChars = 2000): strin
   return out || null;
 }
 
-// ─── 개요 LLM 요약 (claude -p) ───
+// ─── LLM 요약 공용부 (claude -p) ───
+
+const OVERVIEW_HEADER = `다음은 한국 상장사들의 사업보고서 "사업의 개요" 원문이다. 각 회사별로 3~4문장으로 요약하라.
+
+요약 목적: 기업가치평가에서 피평가회사와의 "사업 유사성" 판단 재료. 반드시 포함할 것:
+- 주력 사업/제품·서비스 (무엇으로 돈을 버는가)
+- 사업 부문 구성 (복수 부문이면 각각)
+- 주요 전방시장/고객 (있으면)
+산업 일반론·거시경제 서술은 제외하라.`;
+
+const SEGMENTS_HEADER = `다음은 한국 상장사들의 사업보고서 "매출실적" 표 발췌다. 각 회사별로 부문별(품목별) 매출 구성을 한 줄로 요약하라.
+
+규칙:
+- 가장 최근 보고기간(통상 첫 번째 금액 열, 예: "제N기 3분기") 기준으로 요약하고, 기간과 금액 단위를 먼저 명시
+- 형식 예: "제73기 3분기 누계(백만원): 반도체(Wafer 등) 974,005 (96%) · 골프장·부동산 13,519 (1%) · 건설 1,080 (0%) · 합금철 20,833 (2%)"
+- 비중(%)은 합계 대비 계산해 정수로. 부문이 하나뿐이면 (100%)
+- 부문 구분이 없고 수출/내수만 있으면 그 구분으로 요약
+- 표에 없는 내용은 지어내지 말 것. 매출 수치가 없으면 "매출 표 없음"이라고만 쓸 것`;
+
+interface LlmItem {
+  code: string;
+  name: string;
+  text: string;
+}
 
 function runClaude(prompt: string): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -72,20 +96,9 @@ function runClaude(prompt: string): Promise<string> {
   });
 }
 
-function buildPrompt(items: Array<{ code: string; name: string; overview: string }>): string {
-  const blocks = items
-    .map(
-      (it) =>
-        `### ${it.code} ${it.name}\n${it.overview.slice(0, OVERVIEW_INPUT_CAP)}`
-    )
-    .join("\n\n");
-  return `다음은 한국 상장사들의 사업보고서 "사업의 개요" 원문이다. 각 회사별로 3~4문장으로 요약하라.
-
-요약 목적: 기업가치평가에서 피평가회사와의 "사업 유사성" 판단 재료. 반드시 포함할 것:
-- 주력 사업/제품·서비스 (무엇으로 돈을 버는가)
-- 사업 부문 구성 (복수 부문이면 각각)
-- 주요 전방시장/고객 (있으면)
-산업 일반론·거시경제 서술은 제외하라.
+function buildPrompt(header: string, items: LlmItem[]): string {
+  const blocks = items.map((it) => `### ${it.code} ${it.name}\n${it.text}`).join("\n\n");
+  return `${header}
 
 출력은 아래 형식의 JSON 객체 하나만 출력하라 (코드블록·설명 금지):
 {"종목코드": "요약문", ...}
@@ -93,7 +106,7 @@ function buildPrompt(items: Array<{ code: string; name: string; overview: string
 ${blocks}`;
 }
 
-function parseSummaryJson(raw: string, codes: string[]): Record<string, string> {
+function parseSummaryJson(raw: string, codes: string[], minLen: number): Record<string, string> {
   let text = raw.trim();
   const fence = text.match(/```(?:json)?\s*([\s\S]*?)```/);
   if (fence) text = fence[1].trim();
@@ -104,9 +117,77 @@ function parseSummaryJson(raw: string, codes: string[]): Record<string, string> 
   const out: Record<string, string> = {};
   for (const code of codes) {
     const v = obj[code];
-    if (typeof v === "string" && v.trim().length >= 20) out[code] = v.trim();
+    if (typeof v === "string" && v.trim().length >= minLen) out[code] = v.trim();
   }
   return out;
+}
+
+/** 배치·병렬·단건 재시도·진행 파일 저장을 포함한 LLM 요약 1단계 실행 (재개 가능) */
+async function runLlmPhase(opts: {
+  label: string;
+  header: string;
+  items: LlmItem[];
+  progressPath: string;
+  minLen: number;
+  limit: number;
+}): Promise<Record<string, string>> {
+  const progress: Record<string, string> = existsSync(opts.progressPath)
+    ? (JSON.parse(readFileSync(opts.progressPath, "utf-8")) as Record<string, string>)
+    : {};
+  const targets = opts.items
+    .filter((it) => !progress[it.code])
+    .slice(0, Number.isFinite(opts.limit) ? opts.limit : undefined);
+  console.log(`${opts.label} 대상: ${targets.length}종목 (완료분 ${Object.keys(progress).length} 제외)`);
+  if (!targets.length) return progress;
+
+  const batches: LlmItem[][] = [];
+  for (let i = 0; i < targets.length; i += BATCH_SIZE) batches.push(targets.slice(i, i + BATCH_SIZE));
+
+  let done = 0;
+  let failed = 0;
+  const saveProgress = () => writeFileSync(opts.progressPath, JSON.stringify(progress), "utf-8");
+
+  async function worker(queue: LlmItem[][]): Promise<void> {
+    for (;;) {
+      const items = queue.shift();
+      if (!items) return;
+      const codes = items.map((i) => i.code);
+      try {
+        let got: Record<string, string> = {};
+        try {
+          got = parseSummaryJson(await runClaude(buildPrompt(opts.header, items)), codes, opts.minLen);
+        } catch {
+          got = parseSummaryJson(await runClaude(buildPrompt(opts.header, items)), codes, opts.minLen); // 1회 재시도
+        }
+        const missing = codes.filter((c) => !got[c]);
+        Object.assign(progress, got);
+        // 배치에서 누락된 종목은 단건 재시도
+        for (const code of missing) {
+          const it = items.find((i) => i.code === code)!;
+          try {
+            const one = parseSummaryJson(await runClaude(buildPrompt(opts.header, [it])), [code], opts.minLen);
+            if (one[code]) progress[code] = one[code];
+            else failed++;
+          } catch {
+            failed++;
+          }
+        }
+      } catch (e) {
+        failed += codes.length;
+        console.warn(`배치 실패 (${codes[0]}~): ${(e as Error).message.slice(0, 120)}`);
+      }
+      done++;
+      saveProgress();
+      if (done % 10 === 0 || done === batches.length) {
+        console.log(`  [${opts.label}] ${done}/${batches.length} 배치 — 누적 ${Object.keys(progress).length}건, 실패 ${failed}`);
+      }
+    }
+  }
+
+  const queue = [...batches];
+  await Promise.all(Array.from({ length: CONCURRENCY }, () => worker(queue)));
+  console.log(`${opts.label} 완료: ${Object.keys(progress).length}건 (실패 ${failed})`);
+  return progress;
 }
 
 // ─── 메인 ───
@@ -116,6 +197,7 @@ interface SnapshotCompany {
   overview: string | null;
   segments: string | null;
   overviewSummary?: string | null;
+  segmentsSummary?: string | null;
   segmentsBrief?: string | null;
   [k: string]: unknown;
 }
@@ -131,7 +213,8 @@ async function main(): Promise<void> {
   const mergeOnly = process.argv.includes("--merge-only");
 
   const snapPath = path.join(SNAPSHOT_DIR, `${dateArg}.json.gz`);
-  const progressPath = path.join(SNAPSHOT_DIR, `overview-summaries-${dateArg}.json`);
+  const ovProgressPath = path.join(SNAPSHOT_DIR, `overview-summaries-${dateArg}.json`);
+  const segProgressPath = path.join(SNAPSHOT_DIR, `segments-summaries-${dateArg}.json`);
 
   const snapshot = JSON.parse(gunzipSync(readFileSync(snapPath)).toString("utf-8")) as {
     _meta: Record<string, unknown>;
@@ -140,94 +223,75 @@ async function main(): Promise<void> {
   const entries = Object.entries(snapshot.companies);
   console.log(`스냅샷 ${dateArg}: ${entries.length}종목`);
 
-  const progress: Record<string, string> = existsSync(progressPath)
-    ? (JSON.parse(readFileSync(progressPath, "utf-8")) as Record<string, string>)
+  // 부문매출 발췌(결정론)는 LLM 입력이자 폴백 — 먼저 계산
+  const briefs = new Map<string, string | null>(
+    entries.map(([code, c]) => [code, compactSegments(c.segments)])
+  );
+
+  let ovProgress: Record<string, string> = existsSync(ovProgressPath)
+    ? JSON.parse(readFileSync(ovProgressPath, "utf-8"))
+    : {};
+  let segProgress: Record<string, string> = existsSync(segProgressPath)
+    ? JSON.parse(readFileSync(segProgressPath, "utf-8"))
     : {};
 
-  // 1) LLM 개요 요약 (재개 가능)
   if (!mergeOnly) {
-    const targets = entries
-      .filter(([code, c]) => c.overview !== null && !progress[code])
-      .slice(0, Number.isFinite(limit) ? limit : undefined);
-    console.log(`개요 요약 대상: ${targets.length}종목 (완료분 ${Object.keys(progress).length} 제외)`);
-
-    const batches: Array<Array<[string, SnapshotCompany]>> = [];
-    for (let i = 0; i < targets.length; i += BATCH_SIZE) batches.push(targets.slice(i, i + BATCH_SIZE));
-
-    let done = 0;
-    let failed = 0;
-    const saveProgress = () => writeFileSync(progressPath, JSON.stringify(progress), "utf-8");
-
-    async function worker(queue: Array<Array<[string, SnapshotCompany]>>): Promise<void> {
-      for (;;) {
-        const batch = queue.shift();
-        if (!batch) return;
-        const items = batch.map(([code, c]) => ({ code, name: c.name, overview: c.overview as string }));
-        const codes = items.map((i) => i.code);
-        try {
-          let got: Record<string, string> = {};
-          try {
-            got = parseSummaryJson(await runClaude(buildPrompt(items)), codes);
-          } catch {
-            got = parseSummaryJson(await runClaude(buildPrompt(items)), codes); // 1회 재시도
-          }
-          const missing = codes.filter((c) => !got[c]);
-          Object.assign(progress, got);
-          // 배치에서 누락된 종목은 단건 재시도
-          for (const code of missing) {
-            const it = items.find((i) => i.code === code)!;
-            try {
-              const one = parseSummaryJson(await runClaude(buildPrompt([it])), [code]);
-              if (one[code]) progress[code] = one[code];
-              else failed++;
-            } catch {
-              failed++;
-            }
-          }
-        } catch (e) {
-          failed += codes.length;
-          console.warn(`배치 실패 (${codes[0]}~): ${(e as Error).message.slice(0, 120)}`);
-        }
-        done++;
-        saveProgress();
-        if (done % 10 === 0 || done === batches.length) {
-          console.log(`  ${done}/${batches.length} 배치 — 누적 ${Object.keys(progress).length}건, 실패 ${failed}`);
-        }
-      }
-    }
-
-    const queue = [...batches];
-    await Promise.all(Array.from({ length: CONCURRENCY }, () => worker(queue)));
-    console.log(`개요 요약 완료: ${Object.keys(progress).length}건 (실패 ${failed})`);
+    ovProgress = await runLlmPhase({
+      label: "개요 요약",
+      header: OVERVIEW_HEADER,
+      items: entries
+        .filter(([, c]) => c.overview !== null)
+        .map(([code, c]) => ({ code, name: c.name, text: (c.overview as string).slice(0, OVERVIEW_INPUT_CAP) })),
+      progressPath: ovProgressPath,
+      minLen: 20,
+      limit,
+    });
+    segProgress = await runLlmPhase({
+      label: "부문매출 요약",
+      header: SEGMENTS_HEADER,
+      items: entries
+        .filter(([code]) => briefs.get(code) !== null)
+        .map(([code, c]) => ({ code, name: c.name, text: briefs.get(code) as string })),
+      progressPath: segProgressPath,
+      minLen: 4, // "매출 표 없음" 같은 짧은 정상 응답 허용
+      limit,
+    });
     if (Number.isFinite(limit)) {
-      console.log("--limit 시험 실행 — 병합 생략. 결과는 진행 파일에서 확인:", progressPath);
+      console.log("--limit 시험 실행 — 병합 생략. 진행 파일:", ovProgressPath, "/", segProgressPath);
       return;
     }
   }
 
-  // 2) 병합: segmentsBrief(결정론) + overviewSummary(LLM) → 스냅샷 재기록 (원문 보존)
+  // 병합: 요약(LLM) + 발췌(결정론) → 스냅샷 재기록 (원문 보존)
   const withOverview = entries.filter(([, c]) => c.overview !== null).length;
-  const covered = entries.filter(([code]) => progress[code]).length;
-  console.log(`병합 준비 — 개요 보유 ${withOverview} / 요약 확보 ${covered}`);
-  if (covered < withOverview * 0.98) {
+  const withSegments = entries.filter(([code]) => briefs.get(code) !== null).length;
+  const ovCovered = entries.filter(([code]) => ovProgress[code]).length;
+  const segCovered = entries.filter(([code]) => segProgress[code]).length;
+  console.log(`병합 준비 — 개요 ${ovCovered}/${withOverview}, 부문매출 ${segCovered}/${withSegments}`);
+  if (ovCovered < withOverview * 0.98 || segCovered < withSegments * 0.98) {
     console.error("요약 커버리지 98% 미만 — 스크립트를 다시 실행해 잔여분을 채운 뒤 병합하세요.");
     process.exit(2);
   }
 
   let briefCount = 0;
   for (const [code, c] of entries) {
-    c.overviewSummary = progress[code] ?? null;
-    c.segmentsBrief = compactSegments(c.segments);
+    c.overviewSummary = ovProgress[code] ?? null;
+    c.segmentsSummary = segProgress[code] ?? null;
+    c.segmentsBrief = briefs.get(code) ?? null;
     if (c.segmentsBrief !== null) briefCount++;
   }
   snapshot._meta.summary = {
-    method: "overview=claude-haiku 3~4문장 요약(1회 생성 후 고정), segments=매출실적 표 구간 결정론적 절단",
+    method:
+      "overview/segments=claude-haiku 요약(1회 생성 후 고정: 개요 3~4문장, 부문매출 최근기수 금액·비중 한 줄), segmentsBrief=매출실적 표 구간 결정론적 절단(폴백)",
     summarizedAt: new Date().toISOString(),
-    overviewSummaryCount: covered,
+    overviewSummaryCount: ovCovered,
+    segmentsSummaryCount: segCovered,
     segmentsBriefCount: briefCount,
   };
   writeFileSync(snapPath, gzipSync(JSON.stringify(snapshot), { level: 9 }));
-  console.log(`병합 완료: ${snapPath} (overviewSummary ${covered}, segmentsBrief ${briefCount})`);
+  console.log(
+    `병합 완료: ${snapPath} (overviewSummary ${ovCovered}, segmentsSummary ${segCovered}, segmentsBrief ${briefCount})`
+  );
 }
 
 // 직접 실행 시에만 main 구동 (compactSegments 를 다른 스크립트에서 import 가능하게)
