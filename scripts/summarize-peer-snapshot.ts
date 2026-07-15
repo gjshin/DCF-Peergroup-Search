@@ -55,6 +55,24 @@ export function compactSegments(segments: string | null, maxChars = 2000): strin
   return out || null;
 }
 
+// ─── 부문매출 요약 정규화 ───
+
+/** "제73기 3분기(백만원):" 류의 기간·단위 머리말 판별 — 부문명에 콜론이 든 경우를 오절단하지 않게 좁게 잡는다 */
+const PERIOD_HEAD =
+  /(제\s*\d+\s*기|\d+\s*분기|당\s*분기|당\s*반기|\d{4}\s*년|\([^)]*원[^)]*\)|\(\s*단위[^)]*\))/;
+
+/**
+ * 부문매출 요약에서 선두 기간·단위 머리말을 제거해 부문 구성만 남긴다.
+ * 구프롬프트로 생성된 진행 파일과 신프롬프트 출력 모두에 적용 가능(멱등).
+ */
+export function stripPeriodPrefix(s: string | null): string | null {
+  if (s === null) return null;
+  const m = /^([^:：]{1,40})[:：]\s*/.exec(s);
+  if (!m || !PERIOD_HEAD.test(m[1])) return s;
+  const rest = s.slice(m[0].length).trim();
+  return rest || s;
+}
+
 // ─── LLM 요약 공용부 (claude -p) ───
 
 const OVERVIEW_HEADER = `다음은 한국 상장사들의 사업보고서 "사업의 개요" 원문이다. 각 회사별로 3~4문장으로 요약하라.
@@ -68,8 +86,8 @@ const OVERVIEW_HEADER = `다음은 한국 상장사들의 사업보고서 "사�
 const SEGMENTS_HEADER = `다음은 한국 상장사들의 사업보고서 "매출실적" 표 발췌다. 각 회사별로 부문별(품목별) 매출 구성을 한 줄로 요약하라.
 
 규칙:
-- 가장 최근 보고기간(통상 첫 번째 금액 열, 예: "제N기 3분기") 기준으로 요약하고, 기간과 금액 단위를 먼저 명시
-- 형식 예: "제73기 3분기 누계(백만원): 반도체(Wafer 등) 974,005 (96%) · 골프장·부동산 13,519 (1%) · 건설 1,080 (0%) · 합금철 20,833 (2%)"
+- 가장 최근 보고기간(통상 첫 번째 금액 열) 기준으로 요약한다. **기간·금액단위 머리말은 쓰지 말고 부문 구성만** 적을 것
+- 형식 예: "반도체(Wafer 등) 974,005 (96%) · 골프장·부동산 13,519 (1%) · 건설 1,080 (0%) · 합금철 20,833 (2%)"
 - 비중(%)은 합계 대비 계산해 정수로. 부문이 하나뿐이면 (100%)
 - 부문 구분이 없고 수출/내수만 있으면 그 구분으로 요약
 - 표에 없는 내용은 지어내지 말 것. 매출 수치가 없으면 "매출 표 없음"이라고만 쓸 것`;
@@ -276,13 +294,13 @@ async function main(): Promise<void> {
   let briefCount = 0;
   for (const [code, c] of entries) {
     c.overviewSummary = ovProgress[code] ?? null;
-    c.segmentsSummary = segProgress[code] ?? null;
+    c.segmentsSummary = stripPeriodPrefix(segProgress[code] ?? null);
     c.segmentsBrief = briefs.get(code) ?? null;
     if (c.segmentsBrief !== null) briefCount++;
   }
   snapshot._meta.summary = {
     method:
-      "overview/segments=claude-haiku 요약(1회 생성 후 고정: 개요 3~4문장, 부문매출 최근기수 금액·비중 한 줄), segmentsBrief=매출실적 표 구간 결정론적 절단(폴백)",
+      "overview/segments=claude-haiku 요약(1회 생성 후 고정: 개요 3~4문장, 부문매출은 최근 기수 부문별 금액·비중 한 줄 — 기간·단위 머리말 제외), segmentsBrief=매출실적 표 구간 결정론적 절단(폴백·기간/단위 확인용)",
     summarizedAt: new Date().toISOString(),
     overviewSummaryCount: ovCovered,
     segmentsSummaryCount: segCovered,
