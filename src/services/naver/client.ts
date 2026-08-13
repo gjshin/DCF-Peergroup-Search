@@ -48,6 +48,36 @@ export async function fetchMarketData(stockCode: string): Promise<MarketDataResu
   };
 }
 
+/**
+ * 평가기준일 시점의 종가를 가져온다 — 기준일 이하 가장 가까운 거래일.
+ *
+ * `fetchMarketData` 는 "지금" 종가만 준다. 과거 기준일로 조회하면서 그것을 쓰면
+ * 베타는 기준일, 시가총액은 오늘이 되어 한 응답 안에서 기준일이 뒤섞인다.
+ *
+ * 규칙(14일 창 → 기준일 이하 마지막 거래일)은 분기말 캐시를 만드는
+ * scripts/collect-valuation-cache.ts 의 collectPrices 와 같다. 캐시 히트와
+ * 캐시 미스가 서로 다른 값을 내면 안 되므로 여기서도 같은 방식으로 구한다.
+ *
+ * 휴장·거래정지로 기준일에 거래가 없으면 그 이전 거래일이 나오므로,
+ * 값과 함께 실제 거래일을 돌려준다.
+ */
+export async function fetchCloseAsOf(
+  stockCode: string,
+  asOfDate: string
+): Promise<{ close: number; date: string } | null> {
+  const d = new Date(
+    `${asOfDate.slice(0, 4)}-${asOfDate.slice(4, 6)}-${asOfDate.slice(6, 8)}`
+  );
+  d.setDate(d.getDate() - 14);
+  const startDate = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, "0")}${String(d.getDate()).padStart(2, "0")}`;
+
+  const prices = await fetchHistoricalPrices(stockCode, startDate, asOfDate);
+  const valid = prices.filter((p) => p.date <= asOfDate);
+  if (valid.length === 0) return null;
+  const last = valid[valid.length - 1];
+  return { close: last.close, date: last.date };
+}
+
 export async function fetchHistoricalPrices(
   stockCode: string,
   startDate: string,

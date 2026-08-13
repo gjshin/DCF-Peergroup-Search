@@ -5,7 +5,7 @@ import { resolveCorpCode, getCompanyInfo } from "../common/stock-code-resolver";
 import { fetchFinancials, fetchStockQuantity, extractSharesInfo, extractNciAndPretax, extractDebtSummary } from "../opendart/client";
 import { REPORT_CODE } from "../opendart/constants";
 import { extractDebtFromXbrl } from "../opendart/xbrl-parser";
-import { fetchMarketData } from "../naver/client";
+import { fetchCloseAsOf } from "../naver/client";
 import { handleApiError } from "../utils/error-handler";
 import { getCachedValuation } from "../cache/valuation-cache";
 import { getIndustryName } from "../opendart/ksic-codes";
@@ -54,7 +54,13 @@ export interface CompactResult {
   ibd: CompactIBD | null;
   nci: number | null;
   pretaxIncome: number | null;
-  marketCap: { price: number | null; shares: number | null; total: number | null };
+  marketCap: {
+    price: number | null;
+    /** 종가가 실제로 찍힌 거래일. 휴장·거래정지면 valuationDate 보다 앞설 수 있다. */
+    priceDate?: string | null;
+    shares: number | null;
+    total: number | null;
+  };
 }
 
 // ─── 도구 등록 ───
@@ -84,7 +90,9 @@ export function registerValuationDataTool(server: McpServer): void {
 - beta: Weekly-2Y, Monthly-5Y — 값은 [실질베타, 조정베타, 포인트수] 배열
 - ibd: 유동/비유동 세부계정 — 값은 [계정명, 금액] 튜플
 - nci: 비지배지분, pretaxIncome: 세전이익
-- marketCap: { price, shares(유통주식수), total }
+- marketCap: { price, priceDate, shares(유통주식수), total }
+  price 는 평가기준일 시점 종가다. priceDate 는 그 종가가 실제로 찍힌 거래일 —
+  휴장·거래정지면 평가기준일보다 앞설 수 있으니, 조서에 옮길 때 이 날짜를 함께 적는다.
 
 [파라미터]
 - stock_codes: 종목코드 6자리 (단일 문자열 또는 최대 10개 배열) — 필수
@@ -135,7 +143,11 @@ Peer Group이 확정된 후 최대 10개 stock_codes 배열로 "한 번만" 호�
           const { weeklyMap, monthlyMap } = await computeBetaGridBatch(uncachedCodes, valuationDate);
 
           // 2. 미스 종목만 재무/주식수/시장/XBRL — 병렬
-          liveResults = await Promise.all(uncachedCodes.map((code) => processCompany(code, year, apiKey, weeklyMap, monthlyMap)));
+          liveResults = await Promise.all(
+            uncachedCodes.map((code) =>
+              processCompany(code, year, valuationDate, apiKey, weeklyMap, monthlyMap),
+            ),
+          );
         }
 
         // 3. 캐시 + 라이브 결과 병합 (요청 순서 유지)
@@ -160,19 +172,19 @@ Peer Group이 확정된 후 최대 10개 stock_codes 배열로 "한 번만" 호�
 async function processCompany(
   code: string,
   year: string,
+  valuationDate: string,
   apiKey: string | undefined,
   weeklyMap: Map<string, StockBetaResult>,
   monthlyMap: Map<string, StockBetaResult>,
 ): Promise<CompactResult> {
-  const valuationDate = formatDate(new Date());
-
   // 병렬: corpCode resolve → 재무/주식수/시장/기업정보
   const corpCode = await resolveCorpCode(code);
 
   const [financialResult, stockQtyResult, marketResult, companyResult] = await Promise.allSettled([
     fetchFinancials(corpCode, year, REPORT_CODE.annual, "CFS", apiKey),
     fetchStockQuantity(corpCode, year, REPORT_CODE.annual, apiKey),
-    fetchMarketData(code),
+    // "지금" 종가가 아니라 평가기준일 시점의 종가 — 분기말 캐시와 같은 규칙으로 구한다
+    fetchCloseAsOf(code, valuationDate),
     getCompanyInfo(code, apiKey),
   ]);
 
@@ -194,8 +206,10 @@ async function processCompany(
     ? extractSharesInfo(stockQtyResult.value, year, REPORT_CODE.annual)
     : null;
 
-  // 종가 + 시가총액
-  const price = marketResult.status === "fulfilled" ? (marketResult.value.price ?? null) : null;
+  // 평가기준일 종가 + 시가총액
+  const asOf = marketResult.status === "fulfilled" ? marketResult.value : null;
+  const price = asOf?.close ?? null;
+  const priceDate = asOf?.date ?? null;
   const mcapTotal = shares && price ? shares.outstanding * price : null;
 
   // IBD (XBRL 우선 → Tier1/2 폴백) + NCI/세전이익
@@ -243,7 +257,7 @@ async function processCompany(
     ibd,
     nci,
     pretaxIncome,
-    marketCap: { price, shares: shares?.outstanding ?? null, total: mcapTotal },
+    marketCap: { price, priceDate, shares: shares?.outstanding ?? null, total: mcapTotal },
   };
 }
 
@@ -260,13 +274,6 @@ function pickBeta(r: CompactResult): CompactResult {
       monthly: m ? { "5Y": m } : null,
     },
   };
-}
-
-function formatDate(date: Date): string {
-  const y = date.getFullYear();
-  const m = String(date.getMonth() + 1).padStart(2, "0");
-  const d = String(date.getDate()).padStart(2, "0");
-  return `${y}${m}${d}`;
 }
 
 /** BetaValues → compact [raw, adjusted, dataPoints] 배열로 변환 */
